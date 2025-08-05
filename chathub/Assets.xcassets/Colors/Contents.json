@@ -1,0 +1,152 @@
+{
+  "info" : {
+    "author" : "xcode",
+    "version" : 1
+  },
+  "colors" : [
+    { "idiom" : "universal", "color" : { "color-space" : "srgb", "components" : { "red" : 0.0118, "green" : 0.749, "blue" : 0.796, "alpha" : 1.0 } }, "name": "liteGradientStart" },
+    { "idiom" : "universal", "color" : { "color-space" : "srgb", "components" : { "red" : 0.102, "green" : 0.329, "blue" : 0.831, "alpha" : 1.0 } }, "name": "liteGradientEnd" },
+    { "idiom" : "universal", "color" : { "color-space" : "srgb", "components" : { "red" : 0.894, "green" : 0.447, "blue" : 0.02, "alpha" : 1.0 } }, "name": "plusGradientStart" },
+    { "idiom" : "universal", "color" : { "color-space" : "srgb", "components" : { "red" : 0.956, "green" : 0.208, "blue" : 0.349, "alpha" : 1.0 } }, "name": "plusGradientEnd" },
+    { "idiom" : "universal", "color" : { "color-space" : "srgb", "components" : { "red" : 0.956, "green" : 0.192, "blue" : 0.125, "alpha" : 1.0 } }, "name": "proGradientStart" },
+    { "idiom" : "universal", "color" : { "color-space" : "srgb", "components" : { "red" : 0.71, "green" : 0.114, "blue" : 0.859, "alpha" : 1.0 } }, "name": "proGradientEnd" },
+    {
+      "idiom" : "universal",
+      "filename" : "SnapYellow.colorset",
+      "color" : {
+        "color-space" : "srgb",
+        "components" : {
+          "red" : "1.0",
+          "green" : "0.92",
+          "blue" : "0.23",
+          "alpha" : "1.0"
+        }
+      },
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "light"
+        },
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ]
+    },
+    {
+      "idiom" : "universal",
+      "filename" : "MaleBlue.colorset",
+      "color" : {
+        "color-space" : "srgb",
+        "components" : {
+          "red" : "0.13",
+          "green" : "0.59",
+          "blue" : "0.95",
+          "alpha" : "1.0"
+        }
+      },
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "light"
+        },
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ]
+    },
+    {
+      "idiom" : "universal",
+      "filename" : "FemalePink.colorset",
+      "color" : {
+        "color-space" : "srgb",
+        "components" : {
+          "red" : "0.91",
+          "green" : "0.12",
+          "blue" : "0.39",
+          "alpha" : "1.0"
+        }
+      },
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "light"
+        },
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ]
+    },
+    {
+      "idiom" : "universal",
+      "filename" : "AndroidGreen.colorset",
+      "color" : {
+        "color-space" : "srgb",
+        "components" : {
+          "red" : "0.30",
+          "green" : "0.69",
+          "blue" : "0.31",
+          "alpha" : "1.0"
+        }
+      },
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "light"
+        },
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ]
+    },
+    {
+      "idiom" : "universal",
+      "filename" : "SuccessGreen.colorset",
+      "color" : {
+        "color-space" : "srgb",
+        "components" : {
+          "red" : "0.30",
+          "green" : "0.69",
+          "blue" : "0.31",
+          "alpha" : "1.0"
+        }
+      },
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "light"
+        },
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ]
+    },
+    {
+      "idiom" : "universal",
+      "filename" : "ErrorRed.colorset",
+      "color" : {
+        "color-space" : "srgb",
+        "components" : {
+          "red" : "0.96",
+          "green" : "0.26",
+          "blue" : "0.21",
+          "alpha" : "1.0"
+        }
+      },
+      "appearances" : [
+        {
+          "appearance" : "luminosity",
+          "value" : "light"
+        },
+        {
+          "appearance" : "luminosity",
+          "value" : "dark"
+        }
+      ]
+    }
+  ]
+}
