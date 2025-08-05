@@ -9,22 +9,26 @@ import Combine
 struct DiscoverTabView: View {
     @StateObject private var viewModel = DiscoverTabViewModel()
     @State private var showSubscriptionPopup: Bool = false
-
-
     @State private var showSearchLimitPopup: Bool = false
     @State private var searchLimitResult: FeatureLimitResult?
     
-
+    // Callback to notify parent when search field is focused
+    var onSearchFocusChanged: ((Bool) -> Void)?
+    
+    // Custom initializer to support onSearchFocusChanged parameter
+    init(onSearchFocusChanged: ((Bool) -> Void)? = nil) {
+        self.onSearchFocusChanged = onSearchFocusChanged
+    }
     
     // Session management - Use specialized managers instead of monolithic SessionManager
     private var userSessionManager = UserSessionManager.shared
     private var appSettingsSessionManager = AppSettingsSessionManager.shared
     private var subscriptionManager = SubscriptionSessionManager.shared
     private var isLiteSubscriber: Bool {
-        subscriptionManager.isUserSubscribedToLite() ||
-        subscriptionManager.isUserSubscribedToPlus() ||
-        subscriptionManager.isUserSubscribedToPro() ||
-        ConversationLimitManagerNew.shared.isNewUser()
+        return subscriptionManager.isUserSubscribedToLite() ||
+               subscriptionManager.isUserSubscribedToPlus() ||
+               subscriptionManager.isUserSubscribedToPro() ||
+               ConversationLimitManagerNew.shared.isNewUser()
     }
     
     var body: some View {
@@ -59,6 +63,9 @@ struct DiscoverTabView: View {
                 if text.isEmpty {
                     viewModel.clearSearchResults()
                 }
+            },
+            onFocusChanged: { focused in
+                onSearchFocusChanged?(focused)
             }
         )
         .padding(.horizontal, 16)
@@ -204,7 +211,6 @@ struct DiscoverTabView: View {
                 )
             }
         }
-        .hidden()
     }
     
 
@@ -261,13 +267,28 @@ struct DiscoverTabView: View {
         
         let result = SearchLimitManager.shared.checkSearchLimit()
         
-        if result.canProceed {
-            AppLogger.log(tag: "LOG-APP: DiscoverView", message: "performSearchWithLimits() Can proceed - performing search")
-            performActualSearch(query: query)
-        } else {
+        AppLogger.log(tag: "LOG-APP: DiscoverView", message: "performSearchWithLimits() Result - canProceed: \(result.canProceed), showPopup: \(result.showPopup), currentUsage: \(result.currentUsage), limit: \(result.limit)")
+        
+        if result.showPopup {
+            // Always show popup for non-Lite subscribers and non-new users
             AppLogger.log(tag: "LOG-APP: DiscoverView", message: "performSearchWithLimits() Showing search limit popup")
+            
+            // Track popup shown
+            SearchAnalytics.shared.trackSearchPopupShown(
+                currentUsage: result.currentUsage,
+                limit: result.limit,
+                remainingCooldown: result.remainingCooldown,
+                triggerReason: result.isLimitReached ? "limit_reached" : "always_show_strategy"
+            )
+            
             searchLimitResult = result
             showSearchLimitPopup = true
+            
+            AppLogger.log(tag: "LOG-APP: DiscoverView", message: "performSearchWithLimits() Set showSearchLimitPopup = true")
+        } else {
+            // Direct search for Lite subscribers and new users
+            AppLogger.log(tag: "LOG-APP: DiscoverView", message: "performSearchWithLimits() Can proceed - performing search")
+            performActualSearch(query: query)
         }
     }
     
@@ -297,13 +318,42 @@ struct DiscoverTabView: View {
                 }
             } else {
                 AppLogger.log(tag: "LOG-APP: DiscoverView", message: "performActualSearch() Search blocked")
+                
+                // Track blocked search
+                let result = SearchLimitManager.shared.checkSearchLimit()
+                if result.isLimitReached {
+                    SearchAnalytics.shared.trackSearchBlockedLimitReached(
+                        currentUsage: result.currentUsage,
+                        limit: result.limit,
+                        searchQuery: query
+                    )
+                } else if SearchLimitManager.shared.isInCooldown() {
+                    SearchAnalytics.shared.trackSearchBlockedCooldown(
+                        remainingCooldown: result.remainingCooldown,
+                        searchQuery: query
+                    )
+                }
             }
         }
     }
     
         private func performSearch(query: String) {
         viewModel.performSearch(query: query)
+        
+        // Track successful search execution
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            let resultsCount = self.viewModel.searchResults.count
+            let userType = SearchAnalytics.shared.getUserType()
+            SearchAnalytics.shared.trackSearchPerformed(
+                searchQuery: query,
+                resultsCount: resultsCount,
+                success: true,
+                userType: userType
+            )
+        }
     }
+    
+    // Removed: now using SearchAnalytics.shared.getUserType() for consistency
     
 
 
@@ -318,6 +368,7 @@ struct DiscoverSearchBar: View {
     @Binding var text: String
     let onSearchButtonClicked: () -> Void
     let onTextChanged: (String) -> Void
+    var onFocusChanged: ((Bool) -> Void)?
     @FocusState private var isTextFieldFocused: Bool
     
     var body: some View {
@@ -348,8 +399,11 @@ struct DiscoverSearchBar: View {
         .contentShape(Rectangle()) // Makes entire area tappable
         .background(Color("shade2"))
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .onTapGesture {
+                        .onTapGesture {
             isTextFieldFocused = true
+        }
+        .onChange(of: isTextFieldFocused) { focused in
+            onFocusChanged?(focused)
         }
         .animation(.none, value: isTextFieldFocused) // Disable animations that might cause lag
     }
@@ -700,6 +754,6 @@ struct DiscoverEmptyStateView: View {
 
 #Preview {
     NavigationView {
-        DiscoverTabView()
+        DiscoverTabView(onSearchFocusChanged: nil)
     }
 }

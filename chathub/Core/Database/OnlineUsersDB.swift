@@ -7,6 +7,8 @@ struct Users {
     var user_image: String
     var user_gender: String
     var user_country: String
+    var user_language: String
+    var user_age: String
     var user_device_id: String
     var user_device_token: String
     var user_area: String
@@ -19,11 +21,11 @@ struct Users {
     // Legacy computed properties for backward compatibility
     var Id: String { return user_id }
     var Name: String { return user_name }
-    var Age: String { return "" } // Not used in Android, keeping for compatibility
+    var Age: String { return user_age } // Return actual user age
     var Country: String { return user_country }
     var Gender: String { return user_gender }
     var IsOnline: Bool { return false } // Not used in Android, keeping for compatibility
-    var Language: String { return "" } // Not used in Android, keeping for compatibility
+    var Language: String { return user_language } // Return actual user language
     var Lasttimeseen: Date { return Date(timeIntervalSince1970: Double(user_last_time_seen)) }
     var DeviceId: String { return user_device_id }
     var ProfileImage: String { return user_image }
@@ -69,6 +71,8 @@ class OnlineUsersDB {
             user_image TEXT DEFAULT '',
             user_gender TEXT DEFAULT '',
             user_country TEXT DEFAULT '',
+            user_language TEXT DEFAULT '',
+            user_age TEXT DEFAULT '',
             user_device_id TEXT DEFAULT '',
             user_device_token TEXT DEFAULT '',
             user_area TEXT DEFAULT '',
@@ -281,14 +285,16 @@ class OnlineUsersDB {
                     let user_image = self.extractString(from: statement, column: 3)
                     let user_gender = self.extractString(from: statement, column: 4)
                     let user_country = self.extractString(from: statement, column: 5)
-                    let user_device_id = self.extractString(from: statement, column: 6)
-                    let user_device_token = self.extractString(from: statement, column: 7)
-                    let user_area = self.extractString(from: statement, column: 8)
-                    let user_city = self.extractString(from: statement, column: 9)
-                    let user_state = self.extractString(from: statement, column: 10)
-                    let user_decent_time = sqlite3_column_int64(statement, 11)
-                    let user_last_time_seen = sqlite3_column_int64(statement, 12)
-                    let isAd = sqlite3_column_int(statement, 13) == 1
+                    let user_language = self.extractString(from: statement, column: 6)
+                    let user_age = self.extractString(from: statement, column: 7)
+                    let user_device_id = self.extractString(from: statement, column: 8)
+                    let user_device_token = self.extractString(from: statement, column: 9)
+                    let user_area = self.extractString(from: statement, column: 10)
+                    let user_city = self.extractString(from: statement, column: 11)
+                    let user_state = self.extractString(from: statement, column: 12)
+                    let user_decent_time = sqlite3_column_int64(statement, 13)
+                    let user_last_time_seen = sqlite3_column_int64(statement, 14)
+                    let isAd = sqlite3_column_int(statement, 15) == 1
                     
                     // Skip corrupted records
                     if user_id.isEmpty && user_name.isEmpty {
@@ -304,6 +310,8 @@ class OnlineUsersDB {
                         user_image: user_image,
                         user_gender: user_gender,
                         user_country: user_country,
+                        user_language: user_language,
+                        user_age: user_age,
                         user_device_id: user_device_id,
                         user_device_token: user_device_token,
                         user_area: user_area,
@@ -350,7 +358,7 @@ class OnlineUsersDB {
     }
     
     // CRITICAL FIX: Proper parameter binding with UTF-8 strings
-    func insert(user_id: String, user_name: String, user_image: String, user_gender: String, user_country: String, user_device_id: String, user_device_token: String, user_area: String, user_city: String, user_state: String, user_decent_time: Int64, user_last_time_seen: Int64, isAd: Bool) {
+    func insert(user_id: String, user_name: String, user_image: String, user_gender: String, user_country: String, user_language: String, user_age: String, user_device_id: String, user_device_token: String, user_area: String, user_city: String, user_state: String, user_decent_time: Int64, user_last_time_seen: Int64, isAd: Bool) {
         
         DatabaseManager.shared.executeOnDatabaseQueueAsync { db in
             guard let db = db else {
@@ -365,7 +373,7 @@ class OnlineUsersDB {
             }
             
             var insertStatement: OpaquePointer?
-            let insertString = "INSERT OR REPLACE INTO OnlineUsers (user_id, user_name, user_image, user_gender, user_country, user_device_id, user_device_token, user_area, user_city, user_state, user_decent_time, user_last_time_seen, isAd) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"
+            let insertString = "INSERT OR REPLACE INTO OnlineUsers (user_id, user_name, user_image, user_gender, user_country, user_language, user_age, user_device_id, user_device_token, user_area, user_city, user_state, user_decent_time, user_last_time_seen, isAd) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);"
             
             AppLogger.log(tag: "LOG-APP: OnlineUsersDB", message: "insert() - Inserting user: \(user_name) with ID: \(user_id)")
             
@@ -378,14 +386,16 @@ class OnlineUsersDB {
                  sqlite3_bind_text(insertStatement, 3, strdup(user_image), -1) { ptr in free(ptr) }
                  sqlite3_bind_text(insertStatement, 4, strdup(user_gender), -1) { ptr in free(ptr) }
                  sqlite3_bind_text(insertStatement, 5, strdup(user_country), -1) { ptr in free(ptr) }
-                 sqlite3_bind_text(insertStatement, 6, strdup(user_device_id), -1) { ptr in free(ptr) }
-                 sqlite3_bind_text(insertStatement, 7, strdup(user_device_token), -1) { ptr in free(ptr) }
-                 sqlite3_bind_text(insertStatement, 8, strdup(user_area), -1) { ptr in free(ptr) }
-                 sqlite3_bind_text(insertStatement, 9, strdup(user_city), -1) { ptr in free(ptr) }
-                 sqlite3_bind_text(insertStatement, 10, strdup(user_state), -1) { ptr in free(ptr) }
-                sqlite3_bind_int64(insertStatement, 11, user_decent_time)
-                sqlite3_bind_int64(insertStatement, 12, user_last_time_seen)
-                sqlite3_bind_int(insertStatement, 13, isAd ? 1 : 0)
+                 sqlite3_bind_text(insertStatement, 6, strdup(user_language), -1) { ptr in free(ptr) }
+                 sqlite3_bind_text(insertStatement, 7, strdup(user_age), -1) { ptr in free(ptr) }
+                 sqlite3_bind_text(insertStatement, 8, strdup(user_device_id), -1) { ptr in free(ptr) }
+                 sqlite3_bind_text(insertStatement, 9, strdup(user_device_token), -1) { ptr in free(ptr) }
+                 sqlite3_bind_text(insertStatement, 10, strdup(user_area), -1) { ptr in free(ptr) }
+                 sqlite3_bind_text(insertStatement, 11, strdup(user_city), -1) { ptr in free(ptr) }
+                 sqlite3_bind_text(insertStatement, 12, strdup(user_state), -1) { ptr in free(ptr) }
+                sqlite3_bind_int64(insertStatement, 13, user_decent_time)
+                sqlite3_bind_int64(insertStatement, 14, user_last_time_seen)
+                sqlite3_bind_int(insertStatement, 15, isAd ? 1 : 0)
                 
                 let stepResult = sqlite3_step(insertStatement)
                 if stepResult == SQLITE_DONE {
@@ -411,6 +421,8 @@ class OnlineUsersDB {
             user_image: ProfileImage,
             user_gender: Gender,
             user_country: Country,
+            user_language: Language,
+            user_age: Age,
             user_device_id: DeviceId,
             user_device_token: "",
             user_area: "",
@@ -516,6 +528,8 @@ class OnlineUsersDB {
             user_image: user.profileImage,
             user_gender: user.gender,
             user_country: user.country,
+            user_language: user.language,
+            user_age: user.age,
             user_device_id: user.deviceId,
             user_device_token: "",
             user_area: "",
@@ -588,14 +602,16 @@ class OnlineUsersDB {
                     let user_image = self.extractString(from: statement, column: 3)
                     let user_gender = self.extractString(from: statement, column: 4)
                     let user_country = self.extractString(from: statement, column: 5)
-                    let user_device_id = self.extractString(from: statement, column: 6)
-                    let user_device_token = self.extractString(from: statement, column: 7)
-                    let user_area = self.extractString(from: statement, column: 8)
-                    let user_city = self.extractString(from: statement, column: 9)
-                    let user_state = self.extractString(from: statement, column: 10)
-                    let user_decent_time = sqlite3_column_int64(statement, 11)
-                    let user_last_time_seen = sqlite3_column_int64(statement, 12)
-                    let isAd = sqlite3_column_int(statement, 13) == 1
+                    let user_language = self.extractString(from: statement, column: 6)
+                    let user_age = self.extractString(from: statement, column: 7)
+                    let user_device_id = self.extractString(from: statement, column: 8)
+                    let user_device_token = self.extractString(from: statement, column: 9)
+                    let user_area = self.extractString(from: statement, column: 10)
+                    let user_city = self.extractString(from: statement, column: 11)
+                    let user_state = self.extractString(from: statement, column: 12)
+                    let user_decent_time = sqlite3_column_int64(statement, 13)
+                    let user_last_time_seen = sqlite3_column_int64(statement, 14)
+                    let isAd = sqlite3_column_int(statement, 15) == 1
                     
                     if !user_id.isEmpty && !user_name.isEmpty {
                         let user = Users(
@@ -604,6 +620,8 @@ class OnlineUsersDB {
                             user_image: user_image,
                             user_gender: user_gender,
                             user_country: user_country,
+                            user_language: user_language,
+                            user_age: user_age,
                             user_device_id: user_device_id,
                             user_device_token: user_device_token,
                             user_area: user_area,
@@ -653,14 +671,16 @@ class OnlineUsersDB {
                     let user_image = self.extractString(from: statement, column: 3)
                     let user_gender = self.extractString(from: statement, column: 4)
                     let user_country = self.extractString(from: statement, column: 5)
-                    let user_device_id = self.extractString(from: statement, column: 6)
-                    let user_device_token = self.extractString(from: statement, column: 7)
-                    let user_area = self.extractString(from: statement, column: 8)
-                    let user_city = self.extractString(from: statement, column: 9)
-                    let user_state = self.extractString(from: statement, column: 10)
-                    let user_decent_time = sqlite3_column_int64(statement, 11)
-                    let user_last_time_seen = sqlite3_column_int64(statement, 12)
-                    let isAd = sqlite3_column_int(statement, 13) == 1
+                    let user_language = self.extractString(from: statement, column: 6)
+                    let user_age = self.extractString(from: statement, column: 7)
+                    let user_device_id = self.extractString(from: statement, column: 8)
+                    let user_device_token = self.extractString(from: statement, column: 9)
+                    let user_area = self.extractString(from: statement, column: 10)
+                    let user_city = self.extractString(from: statement, column: 11)
+                    let user_state = self.extractString(from: statement, column: 12)
+                    let user_decent_time = sqlite3_column_int64(statement, 13)
+                    let user_last_time_seen = sqlite3_column_int64(statement, 14)
+                    let isAd = sqlite3_column_int(statement, 15) == 1
                     
                     if !user_id.isEmpty && !user_name.isEmpty {
                         let user = Users(
@@ -669,6 +689,8 @@ class OnlineUsersDB {
                             user_image: user_image,
                             user_gender: user_gender,
                             user_country: user_country,
+                            user_language: user_language,
+                            user_age: user_age,
                             user_device_id: user_device_id,
                             user_device_token: user_device_token,
                             user_area: user_area,
@@ -718,14 +740,16 @@ class OnlineUsersDB {
                     let user_image = self.extractString(from: statement, column: 3)
                     let user_gender = self.extractString(from: statement, column: 4)
                     let user_country = self.extractString(from: statement, column: 5)
-                    let user_device_id = self.extractString(from: statement, column: 6)
-                    let user_device_token = self.extractString(from: statement, column: 7)
-                    let user_area = self.extractString(from: statement, column: 8)
-                    let user_city = self.extractString(from: statement, column: 9)
-                    let user_state = self.extractString(from: statement, column: 10)
-                    let user_decent_time = sqlite3_column_int64(statement, 11)
-                    let user_last_time_seen = sqlite3_column_int64(statement, 12)
-                    let isAd = sqlite3_column_int(statement, 13) == 1
+                    let user_language = self.extractString(from: statement, column: 6)
+                    let user_age = self.extractString(from: statement, column: 7)
+                    let user_device_id = self.extractString(from: statement, column: 8)
+                    let user_device_token = self.extractString(from: statement, column: 9)
+                    let user_area = self.extractString(from: statement, column: 10)
+                    let user_city = self.extractString(from: statement, column: 11)
+                    let user_state = self.extractString(from: statement, column: 12)
+                    let user_decent_time = sqlite3_column_int64(statement, 13)
+                    let user_last_time_seen = sqlite3_column_int64(statement, 14)
+                    let isAd = sqlite3_column_int(statement, 15) == 1
                     
                     if !user_id.isEmpty && !user_name.isEmpty {
                         let user = Users(
@@ -734,6 +758,8 @@ class OnlineUsersDB {
                             user_image: user_image,
                             user_gender: user_gender,
                             user_country: user_country,
+                            user_language: user_language,
+                            user_age: user_age,
                             user_device_id: user_device_id,
                             user_device_token: user_device_token,
                             user_area: user_area,

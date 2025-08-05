@@ -480,13 +480,24 @@ struct FiltersView: View {
         // Android parity: Match onResume() gender loading logic exactly
         let sessionManager = UserSessionManager.shared
         
-        if let savedGender = sessionManager.filterGender, savedGender.count > 1 {
-            if savedGender.lowercased() == "female" {
+        if let savedGender = sessionManager.filterGender, !savedGender.isEmpty {
+            let gender = savedGender.lowercased()
+            if gender == "female" {
                 selectedFemale = true
-            }
-            if savedGender.lowercased() == "male" {
+                selectedMale = false
+            } else if gender == "male" {
                 selectedMale = true
+                selectedFemale = false
+            } else if gender == "both" {
+                selectedMale = true
+                selectedFemale = true
+            } else {
+                selectedMale = false
+                selectedFemale = false
             }
+        } else {
+            selectedMale = false
+            selectedFemale = false
         }
         
         AppLogger.log(tag: "LOG-APP: FiltersView", message: "loadGenderFilters() Gender loaded: \(sessionManager.filterGender ?? ""), Male: \(selectedMale), Female: \(selectedFemale)")
@@ -539,18 +550,24 @@ struct FiltersView: View {
         }
     }
     
-    // Gender selection handler - Android parity: immediate save to SessionManager when checked
+    // Gender selection handler - save current gender selection state to SessionManager
     private func handleGenderSelection(isMale: Bool, isSelected: Bool) {
-        if isSelected {
-            if isMale {
-                UserSessionManager.shared.filterGender = "Male"
-                // Android doesn't clear other gender, allows both to be selected
-            } else {
-                UserSessionManager.shared.filterGender = "Female"
-                // Android doesn't clear other gender, allows both to be selected
-            }
+        AppLogger.log(tag: "LOG-APP: FiltersView", message: "handleGenderSelection() isMale: \(isMale), isSelected: \(isSelected)")
+        
+        // Save the complete gender selection state based on current UI state
+        if selectedMale && selectedFemale {
+            UserSessionManager.shared.filterGender = "Both"
+            AppLogger.log(tag: "LOG-APP: FiltersView", message: "handleGenderSelection() Saved: Both")
+        } else if selectedMale {
+            UserSessionManager.shared.filterGender = "Male"
+            AppLogger.log(tag: "LOG-APP: FiltersView", message: "handleGenderSelection() Saved: Male")
+        } else if selectedFemale {
+            UserSessionManager.shared.filterGender = "Female"
+            AppLogger.log(tag: "LOG-APP: FiltersView", message: "handleGenderSelection() Saved: Female")
+        } else {
+            UserSessionManager.shared.filterGender = ""
+            AppLogger.log(tag: "LOG-APP: FiltersView", message: "handleGenderSelection() Saved: None")
         }
-        // Android doesn't clear gender when unchecked, gender persists until other is selected
     }
     
     private func validateAges() -> Bool {
@@ -617,8 +634,15 @@ struct FiltersView: View {
             UserSessionManager.shared.filterCountry = ""
         }
         
-        if selectedLanguage.count > 0 {
-            UserSessionManager.shared.filterLanguage = selectedLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+        let currentLanguageInput = selectedLanguage.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        if currentLanguageInput.count > 0 && !getAllLanguages().contains(currentLanguageInput) {
+            languageErrorMessage = "Please select a valid language from the list"
+            return
+        } else if currentLanguageInput.count > 0 {
+            UserSessionManager.shared.filterLanguage = currentLanguageInput
+        } else {
+            UserSessionManager.shared.filterLanguage = ""
         }
         
         // Reset online users refresh time (matching Android)
@@ -653,27 +677,45 @@ struct FiltersView: View {
         
         let result = FilterLimitManager.shared.checkFilterLimit()
         
-        if result.canProceed {
-            AppLogger.log(tag: "LOG-APP: FiltersView", message: "performFilterWithLimits() Can proceed - applying filters")
-            performActualFilter()
-        } else {
+        if result.showPopup {
+            // Always show popup for non-Lite subscribers and non-new users
             AppLogger.log(tag: "LOG-APP: FiltersView", message: "performFilterWithLimits() Showing filter limit popup")
+            
+            // Track popup shown
+            FilterAnalytics.shared.trackFilterPopupShown(
+                currentUsage: result.currentUsage,
+                limit: result.limit,
+                remainingCooldown: result.remainingCooldown,
+                triggerReason: result.isLimitReached ? "limit_reached" : "always_show_strategy"
+            )
+            
             filterLimitResult = result
             showFilterLimitPopup = true
+        } else {
+            // Lite subscribers and new users bypass popup entirely
+            AppLogger.log(tag: "LOG-APP: FiltersView", message: "performFilterWithLimits() User bypassing popup - applying filters directly")
+            
+            // Track bypass analytics
+            let userType = FilterAnalytics.shared.getUserType()
+            if userType == "lite_subscriber" {
+                FilterAnalytics.shared.trackLiteSubscriberBypass()
+            } else if userType == "new_user" {
+                let firstAccountTime = UserSessionManager.shared.firstAccountCreatedTime
+                let newUserPeriod = SessionManager.shared.newUserFreePeriodSeconds
+                let remainingTime = TimeInterval(newUserPeriod) - (Date().timeIntervalSince1970 - firstAccountTime)
+                FilterAnalytics.shared.trackNewUserBypass(timeRemaining: max(0, remainingTime))
+            }
+            
+            performActualFilter()
         }
     }
     
     private func handleFilterAction() {
         AppLogger.log(tag: "LOG-APP: FiltersView", message: "handleFilterAction() Free filter button tapped")
         
-        // Check limits again and proceed if allowed
-        let result = FilterLimitManager.shared.checkFilterLimit()
-        
-        if result.canProceed {
-            performActualFilter()
-        } else {
-            AppLogger.log(tag: "LOG-APP: FiltersView", message: "handleFilterAction() Still at limit")
-        }
+        // User clicked filter from popup - they were already verified to proceed
+        // No need to check limits again, just apply the filter
+        performActualFilter()
     }
     
     private func performActualFilter() {

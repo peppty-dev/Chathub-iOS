@@ -34,8 +34,6 @@ class ConversationLimitManager: ObservableObject {
     // MARK: - Main Check Method (Android Parity)
     func checkConversationLimitAndProceed(callback: ConversationLimitCallback) {
         AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "checkConversationLimitAndProceed() Starting conversation limit check")
-        
-        do {
             // Log subscription status for debugging
             let isLite = subscriptionSessionManager.isUserSubscribedToLite()
             let isPlus = subscriptionSessionManager.isUserSubscribedToPlus()
@@ -98,11 +96,6 @@ class ConversationLimitManager: ObservableObject {
                 startNewCooldown()
                 callback.onShowDialog()
             }
-            
-        } catch {
-            AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "checkConversationLimitAndProceed() Error: \(error.localizedDescription)")
-            callback.onError(error)
-        }
     }
     
     // MARK: - Show Dialog Method
@@ -158,13 +151,14 @@ class ConversationLimitManager: ObservableObject {
             let elapsedTime = currentTime - cooldownStartTime
             let remaining = max(0, totalDurationSeconds - elapsedTime)
             
-            if remaining <= 0 {
+            // Fix: Use tolerance of 1 second to handle timing precision issues (consistent with other cooldown systems)
+            if remaining <= 1 {
                 self.completeTimer()
             }
         }
         
-        // Background timer to ensure we complete even if UI timer fails (every 5 seconds)
-        backgroundTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+        // Background timer to ensure we complete even if UI timer fails (every 1 second for maximum responsiveness)
+        backgroundTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             guard let self = self else { return }
             
             let currentTime = Int64(Date().timeIntervalSince1970)
@@ -172,7 +166,8 @@ class ConversationLimitManager: ObservableObject {
             let elapsedTime = currentTime - cooldownStartTime
             let remaining = max(0, totalDurationSeconds - elapsedTime)
             
-            if remaining <= 0 {
+            // Fix: Use tolerance of 1 second to handle timing precision issues (consistent with other cooldown systems)
+            if remaining <= 1 {
                 self.completeTimer()
             }
         }

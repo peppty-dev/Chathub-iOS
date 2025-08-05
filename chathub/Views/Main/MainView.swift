@@ -6,6 +6,7 @@ struct MainView: View {
     @State private var selectedTab = 0
     @State private var showSubscriptionView = false
     @StateObject private var badgeManager = InAppNotificationBadgeManager.shared
+    @State private var isSearchFocused = false
     
     // Add state for refresh popup at MainView level
 
@@ -59,7 +60,11 @@ struct MainView: View {
                             } else if selectedTab == 1 {
                                 ChatsTabView()
                             } else if selectedTab == 2 {
-                                DiscoverTabView()
+                                DiscoverTabView(onSearchFocusChanged: { focused in
+                                    withAnimation(.easeInOut(duration: 0.2)) {
+                                        isSearchFocused = focused
+                                    }
+                                })
                             } else if selectedTab == 3 {
                                 GamesTabView()
                             } else if selectedTab == 4 {
@@ -70,19 +75,22 @@ struct MainView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding(.top, 60) // Height of header
                     
-                    // Custom Tab Bar
-                    CustomTabBar(
-                        selectedTab: $selectedTab,
-                        tabTitles: tabTitles,
-                        tabIcons: tabIcons,
-                        chatsBadgeCount: badgeManager.chatsBadgeCount,
-                        discoverBadgeCount: badgeManager.discoverBadgeCount
-                    )
-                    .onReceive(badgeManager.$chatsBadgeCount) { count in
-                        AppLogger.log(tag: "LOG-APP: MainView", message: "chatsBadgeCount updated: \(count)")
-                    }
-                    .onReceive(badgeManager.$discoverBadgeCount) { count in
-                        AppLogger.log(tag: "LOG-APP: MainView", message: "discoverBadgeCount updated: \(count)")
+                    // Custom Tab Bar - hide when search is focused
+                    if !isSearchFocused {
+                        CustomTabBar(
+                            selectedTab: $selectedTab,
+                            tabTitles: tabTitles,
+                            tabIcons: tabIcons,
+                            chatsBadgeCount: badgeManager.chatsBadgeCount,
+                            discoverBadgeCount: badgeManager.discoverBadgeCount
+                        )
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                        .onReceive(badgeManager.$chatsBadgeCount) { count in
+                            AppLogger.log(tag: "LOG-APP: MainView", message: "chatsBadgeCount updated: \(count)")
+                        }
+                        .onReceive(badgeManager.$discoverBadgeCount) { count in
+                            AppLogger.log(tag: "LOG-APP: MainView", message: "discoverBadgeCount updated: \(count)")
+                        }
                     }
                 }
                 

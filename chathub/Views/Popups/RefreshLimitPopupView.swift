@@ -12,6 +12,7 @@ struct RefreshLimitPopupView: View {
     var onUpgradeToPremium: () -> Void
     
     @State private var countdownTimer: Timer?
+    @State private var backgroundTimer: Timer?
     @State private var remainingTime: TimeInterval
     @State private var popupStartTime: Date = Date()
     private let totalCooldownDuration: TimeInterval
@@ -267,7 +268,32 @@ struct RefreshLimitPopupView: View {
         }
         .onAppear {
             popupStartTime = Date()
+            
+            // DEBUG: Log popup state before any operations
+            let manager = RefreshLimitManager.shared
+            AppLogger.log(tag: "LOG-APP: RefreshLimitPopupView", message: "onAppear() DEBUG - Initial state: inCooldown: \(manager.isInCooldown()), remaining: \(manager.getRemainingCooldown())s, usage: \(manager.getCurrentUsageCount())/\(manager.getLimit())")
+            
+            // Start cooldown timestamp when popup opens (if limit reached and not already in cooldown)
+            RefreshLimitManager.shared.startCooldownOnPopupOpen()
+            
+            // Recalculate remaining time after potentially starting cooldown
+            remainingTime = RefreshLimitManager.shared.getRemainingCooldown()
+            
+            AppLogger.log(tag: "LOG-APP: RefreshLimitPopupView", message: "onAppear() DEBUG - After startCooldownOnPopupOpen: inCooldown: \(manager.isInCooldown()), remaining: \(remainingTime)s, usage: \(manager.getCurrentUsageCount())/\(manager.getLimit())")
+            
             startCountdownTimer()
+            
+            // Listen for background cooldown expiration
+            NotificationCenter.default.addObserver(
+                forName: BackgroundTimerManager.refreshCooldownExpiredNotification,
+                object: nil,
+                queue: .main
+            ) { _ in
+                AppLogger.log(tag: "LOG-APP: RefreshLimitPopupView", message: "Background cooldown expired - transitioning popup to available state")
+                remainingTime = 0
+                stopCountdownTimer()
+                // Don't dismiss popup - let it transition to available state
+            }
             
             // Track pricing display if available
             if let price = getLiteSubscriptionPrice() {
@@ -278,6 +304,8 @@ struct RefreshLimitPopupView: View {
         }
         .onDisappear {
             stopCountdownTimer()
+            // Clean up notification observer
+            NotificationCenter.default.removeObserver(self, name: BackgroundTimerManager.refreshCooldownExpiredNotification, object: nil)
         }
     }
     
@@ -325,23 +353,68 @@ struct RefreshLimitPopupView: View {
     }
     
     private func startCountdownTimer() {
-        guard isLimitReached && remainingCooldown > 0 else { return }
+        guard isLimitReached && remainingTime > 0 else { return }
         
-        // Update every 0.1 seconds for smooth, fluid animation like butterscotch
+        // Stop any existing timers
+        stopCountdownTimer()
+        
+        // UI Timer: Update every 0.1 seconds for smooth animation
         countdownTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
             if remainingTime > 0.1 {
                 remainingTime -= 0.1
             } else {
                 remainingTime = 0
                 stopCountdownTimer()
-                // Don't auto-dismiss popup - let user manually click refresh when ready
+                
+                // Reset the usage count when cooldown expires
+                RefreshLimitManager.shared.resetCooldown()
+                
+                // Don't dismiss popup - let it transition to available state
+                // The UI will automatically show the refresh button and hide progress bar
+                // based on remainingTime = 0 condition
+                AppLogger.log(tag: "LOG-APP: RefreshLimitPopupView", message: "Timer expired - transitioning popup to available state")
             }
         }
+        
+        // Background Timer: Safety net that ensures completion even if UI timer fails
+        // Check every 1 second for maximum responsiveness and precision
+        backgroundTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
+            // Recalculate remaining time from actual manager
+            let actualRemaining = RefreshLimitManager.shared.getRemainingCooldown()
+            
+            // Fix: Use tolerance of 1 second to handle timing precision issues (consistent with BackgroundTimerManager)
+            if actualRemaining <= 1.0 {
+                AppLogger.log(tag: "LOG-APP: RefreshLimitPopupView", message: "Background timer detected cooldown expiration - transitioning to available state (remaining: \(actualRemaining)s)")
+                
+                // Ensure cooldown is reset
+                RefreshLimitManager.shared.resetCooldown()
+                
+                DispatchQueue.main.async {
+                    remainingTime = 0
+                    stopCountdownTimer()
+                    // Don't dismiss popup - let it transition to available state
+                }
+            } else {
+                // Sync UI timer with actual remaining time if they diverge significantly
+                let timeDifference = abs(remainingTime - actualRemaining)
+                if timeDifference > 1.0 { // If UI and actual time differ by more than 1 second (more responsive with 1s checks)
+                    AppLogger.log(tag: "LOG-APP: RefreshLimitPopupView", message: "Background timer syncing UI time - UI: \(remainingTime)s, Actual: \(actualRemaining)s")
+                    DispatchQueue.main.async {
+                        remainingTime = actualRemaining
+                    }
+                }
+            }
+        }
+        
+        AppLogger.log(tag: "LOG-APP: RefreshLimitPopupView", message: "Started dual timers - UI: 0.1s interval, Background: 1s interval")
     }
     
     private func stopCountdownTimer() {
         countdownTimer?.invalidate()
         countdownTimer = nil
+        backgroundTimer?.invalidate()
+        backgroundTimer = nil
+        AppLogger.log(tag: "LOG-APP: RefreshLimitPopupView", message: "Stopped all timers")
     }
     
     private func formatTime(_ seconds: TimeInterval) -> String {

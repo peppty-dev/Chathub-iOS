@@ -46,14 +46,42 @@ class RefreshLimitManager: BaseFeatureLimitManager {
     
     /// Check if refresh action can be performed and return detailed result
     func checkRefreshLimit() -> FeatureLimitResult {
-        // Check if cooldown has expired and auto-reset if needed
-        if isInCooldown() && getRemainingCooldown() <= 0 {
-            AppLogger.log(tag: "LOG-APP: RefreshLimitManager", message: "checkRefreshLimit() - Cooldown expired, auto-resetting usage count")
-            resetCooldown()
-        }
-        
+        // DEBUG: Add comprehensive logging for app launch cooldown debugging
+        let currentTime = Int64(Date().timeIntervalSince1970)
+        let cooldownStartTime = getCooldownStartTime()
+        let cooldownDuration = getCooldownDuration()
         let currentUsage = getCurrentUsageCount()
         let limit = getLimit()
+        
+        AppLogger.log(tag: "LOG-APP: RefreshLimitManager", message: "checkRefreshLimit() DEBUG - Current time: \(currentTime), Cooldown start: \(cooldownStartTime), Duration: \(cooldownDuration)s, Usage: \(currentUsage)/\(limit)")
+        
+        if cooldownStartTime > 0 {
+            let elapsed = currentTime - cooldownStartTime
+            let remaining = cooldownDuration - TimeInterval(elapsed)
+            AppLogger.log(tag: "LOG-APP: RefreshLimitManager", message: "checkRefreshLimit() DEBUG - Elapsed: \(elapsed)s, Remaining: \(remaining)s, isInCooldown: \(isInCooldown())")
+        }
+        
+        // Check if cooldown has expired and auto-reset if needed
+        var wasAutoReset = false
+        // CRITICAL FIX: Use more robust cooldown expiration check to handle precision issues
+        let cooldownStart = getCooldownStartTime()
+        if cooldownStart > 0 {
+            let currentTime = Int64(Date().timeIntervalSince1970)
+            let elapsed = currentTime - cooldownStart
+            let cooldownDuration = getCooldownDuration()
+            let remaining = max(0, cooldownDuration - TimeInterval(elapsed))
+            
+            AppLogger.log(tag: "LOG-APP: RefreshLimitManager", message: "checkRefreshLimit() PRECISION DEBUG - Start: \(cooldownStart), Current: \(currentTime), Elapsed: \(elapsed)s, Duration: \(cooldownDuration)s, Remaining: \(remaining)s")
+            
+            // Fix: Use tolerance of 1 second to handle timing precision issues
+            if remaining <= 1.0 {
+                AppLogger.log(tag: "LOG-APP: RefreshLimitManager", message: "checkRefreshLimit() - Cooldown expired, auto-resetting usage count (remaining: \(remaining)s)")
+                resetCooldown()
+                wasAutoReset = true
+            }
+        }
+        
+        // Reuse variables from earlier debug section
         let remainingCooldown = getRemainingCooldown()
         
         // Check if user can proceed without popup (Light subscribers and new users)
@@ -61,11 +89,23 @@ class RefreshLimitManager: BaseFeatureLimitManager {
         let isNewUserInFreePeriod = isNewUser()
         
         // Debug logging to understand user categorization
-        AppLogger.log(tag: "LOG-APP: RefreshLimitManager", message: "checkRefreshLimit() - isLiteSubscriber: \(isLightSubscriber), isNewUser: \(isNewUserInFreePeriod), currentUsage: \(currentUsage), limit: \(limit)")
+        AppLogger.log(tag: "LOG-APP: RefreshLimitManager", message: "checkRefreshLimit() - isLiteSubscriber: \(isLightSubscriber), isNewUser: \(isNewUserInFreePeriod), currentUsage: \(currentUsage), limit: \(limit), wasAutoReset: \(wasAutoReset)")
         
         // Light subscribers and new users bypass popup entirely
         if isLightSubscriber || isNewUserInFreePeriod {
             AppLogger.log(tag: "LOG-APP: RefreshLimitManager", message: "checkRefreshLimit() - User bypassing popup (Lite: \(isLightSubscriber), New: \(isNewUserInFreePeriod))")
+            return FeatureLimitResult(
+                canProceed: true,
+                showPopup: false,
+                remainingCooldown: 0,
+                currentUsage: currentUsage,
+                limit: limit
+            )
+        }
+        
+        // If cooldown was just auto-reset, don't show popup - user has fresh applications
+        if wasAutoReset {
+            AppLogger.log(tag: "LOG-APP: RefreshLimitManager", message: "checkRefreshLimit() - Cooldown auto-reset, bypassing popup to allow immediate refresh")
             return FeatureLimitResult(
                 canProceed: true,
                 showPopup: false,

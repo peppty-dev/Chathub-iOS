@@ -12,6 +12,8 @@ import Combine
 class SearchLimitManager: BaseFeatureLimitManager {
     static let shared = SearchLimitManager()
     
+    private let sessionManager = SessionManager.shared
+    
     private init() {
         super.init(featureType: .search)
     }
@@ -19,45 +21,99 @@ class SearchLimitManager: BaseFeatureLimitManager {
     // MARK: - Override Base Methods
     
     override func getCurrentUsageCount() -> Int {
-        return messagingSessionManager.searchUsageCount
+        return sessionManager.searchUsageCount
     }
     
     override func getLimit() -> Int {
-        return messagingSessionManager.freeSearchLimit
+        return sessionManager.freeSearchLimit
     }
     
     override func getCooldownDuration() -> TimeInterval {
-        return messagingSessionManager.freeSearchCooldownSeconds
+        return TimeInterval(sessionManager.freeSearchCooldownSeconds)
     }
     
     override func setUsageCount(_ count: Int) {
-        messagingSessionManager.searchUsageCount = count
+        sessionManager.searchUsageCount = count
     }
     
     override func getCooldownStartTime() -> Int64 {
-        return messagingSessionManager.searchLimitCooldownStartTime
+        return sessionManager.searchLimitCooldownStartTime
     }
     
     override func setCooldownStartTime(_ time: Int64) {
-        messagingSessionManager.searchLimitCooldownStartTime = time
+        sessionManager.searchLimitCooldownStartTime = time
     }
     
     // MARK: - Search-Specific Methods
     
     /// Check if search action can be performed and return detailed result
     func checkSearchLimit() -> FeatureLimitResult {
-        let canProceed = canPerformAction()
+        // Check if cooldown has expired and auto-reset if needed
+        var wasAutoReset = false
+        // CRITICAL FIX: Use more robust cooldown expiration check to handle precision issues
+        let cooldownStart = getCooldownStartTime()
+        if cooldownStart > 0 {
+            let currentTime = Int64(Date().timeIntervalSince1970)
+            let elapsed = currentTime - cooldownStart
+            let cooldownDuration = getCooldownDuration()
+            let remaining = max(0, cooldownDuration - TimeInterval(elapsed))
+            
+            AppLogger.log(tag: "LOG-APP: SearchLimitManager", message: "checkSearchLimit() PRECISION DEBUG - Start: \(cooldownStart), Current: \(currentTime), Elapsed: \(elapsed)s, Duration: \(cooldownDuration)s, Remaining: \(remaining)s")
+            
+            // Fix: Use tolerance of 1 second to handle timing precision issues
+            if remaining <= 1.0 {
+                AppLogger.log(tag: "LOG-APP: SearchLimitManager", message: "checkSearchLimit() - Cooldown expired, auto-resetting usage count (remaining: \(remaining)s)")
+                resetCooldown()
+                wasAutoReset = true
+            }
+        }
+        
         let currentUsage = getCurrentUsageCount()
         let limit = getLimit()
         let remainingCooldown = getRemainingCooldown()
         
-        // Show popup if user is not premium and either at limit or in cooldown
-        let showPopup = !subscriptionSessionManager.isSubscriptionActive() && 
-                       (currentUsage >= limit || isInCooldown())
+        // Check if user can proceed without popup (Lite subscribers and new users)
+        let isLiteSubscriber = subscriptionSessionManager.isUserSubscribedToLite()
+        let isNewUserInFreePeriod = isNewUser()
+        
+        // Debug logging to understand user categorization
+        AppLogger.log(tag: "LOG-APP: SearchLimitManager", message: "checkSearchLimit() - isLiteSubscriber: \(isLiteSubscriber), isNewUser: \(isNewUserInFreePeriod), currentUsage: \(currentUsage), limit: \(limit), wasAutoReset: \(wasAutoReset)")
+        
+        // Lite subscribers and new users bypass popup entirely
+        if isLiteSubscriber || isNewUserInFreePeriod {
+            AppLogger.log(tag: "LOG-APP: SearchLimitManager", message: "checkSearchLimit() - User bypassing popup (Lite: \(isLiteSubscriber), New: \(isNewUserInFreePeriod))")
+            return FeatureLimitResult(
+                canProceed: true,
+                showPopup: false,
+                remainingCooldown: 0,
+                currentUsage: currentUsage,
+                limit: limit
+            )
+        }
+        
+        // If cooldown was just auto-reset, don't show popup - user has fresh applications
+        if wasAutoReset {
+            AppLogger.log(tag: "LOG-APP: SearchLimitManager", message: "checkSearchLimit() - Cooldown auto-reset, bypassing popup to allow immediate search")
+            return FeatureLimitResult(
+                canProceed: true,
+                showPopup: false,
+                remainingCooldown: 0,
+                currentUsage: currentUsage,
+                limit: limit
+            )
+        }
+        
+        // For all other users, always show popup (to display search count or timer)
+        let canProceed = canPerformAction()
+        
+        // Always show popup for non-Lite/non-new users to display progress
+        let shouldShowPopup = true
+        
+        AppLogger.log(tag: "LOG-APP: SearchLimitManager", message: "checkSearchLimit() - Showing popup with currentUsage: \(currentUsage), limit: \(limit), isLimitReached: \(currentUsage >= limit), canProceed: \(canProceed)")
         
         return FeatureLimitResult(
             canProceed: canProceed,
-            showPopup: showPopup,
+            showPopup: shouldShowPopup,
             remainingCooldown: remainingCooldown,
             currentUsage: currentUsage,
             limit: limit
@@ -82,5 +138,35 @@ class SearchLimitManager: BaseFeatureLimitManager {
     func resetSearchUsage() {
         AppLogger.log(tag: "LOG-APP: SearchLimitManager", message: "resetSearchUsage() Resetting search usage and cooldown")
         resetCooldown()
+    }
+    
+    /// Start cooldown when popup opens (if at limit and not already in cooldown)
+    override func startCooldownOnPopupOpen() {
+        let currentUsage = getCurrentUsageCount()
+        let limit = getLimit()
+        
+        // Only start cooldown if we're at the limit and not already in cooldown
+        if currentUsage >= limit && !isInCooldown() {
+            AppLogger.log(tag: "LOG-APP: SearchLimitManager", message: "startCooldownOnPopupOpen() - Starting cooldown as user has reached limit")
+            startCooldown()
+        }
+    }
+    
+    // MARK: - Private Helper Methods
+    
+    /// Check if user is within new user grace period
+    private func isNewUser() -> Bool {
+        let userSessionManager = UserSessionManager.shared
+        let firstAccountTime = userSessionManager.firstAccountCreatedTime
+        let newUserPeriod = sessionManager.newUserFreePeriodSeconds
+        
+        if firstAccountTime <= 0 || newUserPeriod <= 0 {
+            return false
+        }
+        
+        let currentTime = Date().timeIntervalSince1970
+        let elapsed = currentTime - firstAccountTime
+        
+        return elapsed < TimeInterval(newUserPeriod)
     }
 }

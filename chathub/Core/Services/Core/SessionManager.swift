@@ -116,8 +116,12 @@ class SessionManager: ObservableObject {
         static let refreshLimitCooldownStartTime = "refresh_limit_cooldown_start_time"
         static let freeFilterLimit = "free_user_filter_limit"
         static let freeFilterCooldownSeconds = "free_user_filter_cooldown_seconds"
+        static let filterUsageCount = "filter_usage_count"
+        static let filterLimitCooldownStartTime = "filter_limit_cooldown_start_time"
         static let freeSearchLimit = "free_user_search_limit"
         static let freeSearchCooldownSeconds = "free_user_search_cooldown_seconds"
+        static let searchUsageCount = "search_usage_count"
+        static let searchLimitCooldownStartTime = "search_limit_cooldown_start_time"
         static let keyUserGender = "user_gender"
         static let profanityWordsVersion = "PROFANITYWORDSVERSION"
         static let profanityWords = "PROFANITYWORDS"
@@ -848,7 +852,7 @@ class SessionManager: ObservableObject {
     var freeFilterLimit: Int {
         get { 
             let value = defaults.integer(forKey: Keys.freeFilterLimit)
-            return value > 0 ? value : 8 // Default to 8 filter applications
+            return value > 0 ? value : 2 // Default to 2 filter applications (matches refresh)
         }
         set { defaults.set(newValue, forKey: Keys.freeFilterLimit) }
     }
@@ -856,9 +860,19 @@ class SessionManager: ObservableObject {
     var freeFilterCooldownSeconds: Int {
         get { 
             let value = defaults.integer(forKey: Keys.freeFilterCooldownSeconds)
-            return value > 0 ? value : 240 // Default to 4 minutes
+            return value > 0 ? value : 120 // Default to 2 minutes (matches refresh)
         }
         set { defaults.set(newValue, forKey: Keys.freeFilterCooldownSeconds) }
+    }
+    
+    var filterUsageCount: Int {
+        get { defaults.integer(forKey: Keys.filterUsageCount) }
+        set { defaults.set(newValue, forKey: Keys.filterUsageCount) }
+    }
+    
+    var filterLimitCooldownStartTime: Int64 {
+        get { defaults.object(forKey: Keys.filterLimitCooldownStartTime) as? Int64 ?? 0 }
+        set { defaults.set(newValue, forKey: Keys.filterLimitCooldownStartTime) }
     }
     
     // MARK: - Search Limit Settings
@@ -866,17 +880,53 @@ class SessionManager: ObservableObject {
     var freeSearchLimit: Int {
         get { 
             let value = defaults.integer(forKey: Keys.freeSearchLimit)
-            return value > 0 ? value : 15 // Default to 15 searches
+            return value > 0 ? value : 2 // Default to 2 searches (matches refresh/filter)
         }
         set { defaults.set(newValue, forKey: Keys.freeSearchLimit) }
+    }
+    
+    // MARK: - Debug Methods
+    
+    /// Debug method to check all feature states
+    func debugAllFeatureStates() -> String {
+        let refreshUsage = refreshUsageCount
+        let refreshCooldownStart = refreshLimitCooldownStartTime
+        let refreshLimit = freeRefreshLimit
+        
+        let filterUsage = filterUsageCount
+        let filterCooldownStart = filterLimitCooldownStartTime
+        let filterLimit = freeFilterLimit
+        
+        let searchUsage = searchUsageCount
+        let searchCooldownStart = searchLimitCooldownStartTime
+        let searchLimit = freeSearchLimit
+        
+        let currentTime = Int64(Date().timeIntervalSince1970)
+        
+        return """
+        === FEATURE STATES DEBUG ===
+        REFRESH: usage=\(refreshUsage)/\(refreshLimit), cooldownStart=\(refreshCooldownStart), currentTime=\(currentTime)
+        FILTER:  usage=\(filterUsage)/\(filterLimit), cooldownStart=\(filterCooldownStart), currentTime=\(currentTime)
+        SEARCH:  usage=\(searchUsage)/\(searchLimit), cooldownStart=\(searchCooldownStart), currentTime=\(currentTime)
+        """
     }
     
     var freeSearchCooldownSeconds: Int {
         get { 
             let value = defaults.integer(forKey: Keys.freeSearchCooldownSeconds)
-            return value > 0 ? value : 120 // Default to 2 minutes
+            return value > 0 ? value : 120 // Default to 2 minutes (matches refresh/filter)
         }
         set { defaults.set(newValue, forKey: Keys.freeSearchCooldownSeconds) }
+    }
+    
+    var searchUsageCount: Int {
+        get { defaults.integer(forKey: Keys.searchUsageCount) }
+        set { defaults.set(newValue, forKey: Keys.searchUsageCount) }
+    }
+    
+    var searchLimitCooldownStartTime: Int64 {
+        get { defaults.object(forKey: Keys.searchLimitCooldownStartTime) as? Int64 ?? 0 }
+        set { defaults.set(newValue, forKey: Keys.searchLimitCooldownStartTime) }
     }
     
     // MARK: - User Properties

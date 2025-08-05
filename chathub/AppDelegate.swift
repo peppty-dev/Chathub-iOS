@@ -131,6 +131,15 @@ class AppDelegate: UIResponder, UIApplicationDelegate, MessagingDelegate {
 		BackgroundTaskManager.shared.registerBackgroundTasks()
 		BackgroundTaskManager.shared.scheduleAllPeriodicTasks()
 		AppLogger.log(tag: "LOG-APP: AppDelegate", message: "didFinishLaunchingWithOptions - BackgroundTaskManager initialized (Android WorkManager parity)")
+		
+		// Initialize background timer manager for feature cooldown monitoring
+		BackgroundTimerManager.shared.startMonitoring()
+		AppLogger.log(tag: "LOG-APP: AppDelegate", message: "didFinishLaunchingWithOptions - BackgroundTimerManager started for cooldown monitoring")
+		
+		// CRITICAL FIX: Check for expired cooldowns on app launch (handles app closure scenarios)
+		// When app is completely closed and reopened, we need to reset any expired cooldowns
+		BackgroundTimerManager.shared.checkAllCooldowns()
+		AppLogger.log(tag: "LOG-APP: AppDelegate", message: "didFinishLaunchingWithOptions - Checked for expired cooldowns on app launch")
 
 		// CRITICAL FIX: Register AI profile refresh background task handler BEFORE scheduling
 		registerAIProfileRefreshTask()

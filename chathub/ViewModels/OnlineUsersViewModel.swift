@@ -429,23 +429,41 @@ class OnlineUsersViewModel: ObservableObject {
                 return false
             }
             
-            // Language filter (not available in Android structure, skip for now)
-            // if !f.language.isEmpty && user.Language != f.language {
-            //     return false
-            // }
-            
-            // Age filtering (not available in Android structure, skip for now)
-            // if !f.minAge.isEmpty, let minAge = Int(f.minAge), let userAge = Int(user.Age) {
-            //     if userAge < minAge { return false }
-            // }
-            // if !f.maxAge.isEmpty, let maxAge = Int(f.maxAge), let userAge = Int(user.Age) {
-            //     if userAge > maxAge { return false }
-            // }
-            
-            // Nearby filter (city) - now available in Android structure
-            if !f.nearby.isEmpty && user.user_city != f.nearby {
-                AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "applyLocalFilters() - Filtered out '\(user.user_name)': nearby filter '\(f.nearby)' but user city is '\(user.user_city)'")
+            // Language filter
+            if !f.language.isEmpty && user.user_language != f.language {
+                AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "applyLocalFilters() - Filtered out '\(user.user_name)': language filter '\(f.language)' but user language is '\(user.user_language)'")
                 return false
+            }
+            
+            // Age filtering - convert strings to integers for comparison
+            if !f.minAge.isEmpty, let minAge = Int(f.minAge), let userAge = Int(user.user_age) {
+                if userAge < minAge {
+                    AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "applyLocalFilters() - Filtered out '\(user.user_name)': user age \(userAge) below minimum \(minAge)")
+                    return false
+                }
+            }
+            if !f.maxAge.isEmpty, let maxAge = Int(f.maxAge), let userAge = Int(user.user_age) {
+                if userAge > maxAge {
+                    AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "applyLocalFilters() - Filtered out '\(user.user_name)': user age \(userAge) above maximum \(maxAge)")
+                    return false
+                }
+            }
+            
+            // Nearby filter - f.nearby is "yes" when nearby only is enabled
+            if f.nearby == "yes" {
+                // Get current user's city for comparison (matches Android pattern)
+                let currentUserCity = UserSessionManager.shared.userRetrievedCity
+                
+                if let userCity = currentUserCity, !userCity.isEmpty {
+                    // Filter to show only users from the same city
+                    if user.user_city != userCity {
+                        AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "applyLocalFilters() - Filtered out '\(user.user_name)': nearby filter enabled, user city '\(user.user_city)' != current user city '\(userCity)'")
+                        return false
+                    }
+                } else {
+                    // If current user city is not set, log warning but don't filter
+                    AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "applyLocalFilters() - Nearby filter enabled but current user city is not set (userRetrievedCity is empty), skipping filter for '\(user.user_name)'")
+                }
             }
             
             AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "applyLocalFilters() - User '\(user.user_name)' passed all filters")
@@ -561,6 +579,8 @@ class OnlineUsersViewModel: ObservableObject {
                             user_image: profileImage,
                             user_gender: gender,
                             user_country: country,
+                            user_language: data["user_language"] as? String ?? "",
+                            user_age: data["User_age"] as? String ?? "",
                             user_device_id: deviceId,
                             user_device_token: "", // Not available in Firebase data
                             user_area: "", // Not available in Firebase data
@@ -629,20 +649,29 @@ class OnlineUsersViewModel: ObservableObject {
         AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "loadFiltersFromSessionManager() - filterNearbyOnly: \(userSessionManager.filterNearbyOnly)")
         
         // Load gender filter - matching Android logic
-        if let savedGender = userSessionManager.filterGender, savedGender.count > 1 {
-            if savedGender.lowercased() == "female" {
+        if let savedGender = userSessionManager.filterGender, !savedGender.isEmpty {
+            let gender = savedGender.lowercased()
+            if gender == "female" {
                 filter.female = true
                 filter.male = false
                 AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "loadFiltersFromSessionManager() - Set female=true, male=false")
-            } else if savedGender.lowercased() == "male" {
+            } else if gender == "male" {
                 filter.male = true
                 filter.female = false
                 AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "loadFiltersFromSessionManager() - Set male=true, female=false")
+            } else if gender == "both" {
+                filter.male = true
+                filter.female = true
+                AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "loadFiltersFromSessionManager() - Set both male=true, female=true")
+            } else {
+                filter.male = false
+                filter.female = false
+                AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "loadFiltersFromSessionManager() - Invalid gender filter, set both to false")
             }
-        
+        } else {
             filter.male = false
             filter.female = false
-            AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "loadFiltersFromSessionManager() - No gender filter or invalid, set both to false")
+            AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "loadFiltersFromSessionManager() - No gender filter, set both to false")
         }
         
         // Load other filters
