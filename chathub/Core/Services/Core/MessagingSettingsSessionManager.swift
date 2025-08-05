@@ -31,12 +31,6 @@ class MessagingSettingsSessionManager: ObservableObject {
         static let conversationsStartedCount = "conversations_started_count"
         static let conversationLimitCooldownStartTime = "conversation_limit_cooldown_start_time"
         
-        // Refresh Limits Keys
-        static let freeRefreshLimit = "free_user_refresh_limit"
-        static let freeRefreshCooldownSeconds = "free_user_refresh_cooldown_seconds"
-        static let refreshUsageCount = "refresh_usage_count"
-        static let refreshLimitCooldownStartTime = "refresh_limit_cooldown_start_time"
-        
         // Filter Limits Keys
         static let freeFilterLimit = "free_user_filter_limit"
         static let freeFilterCooldownSeconds = "free_user_filter_cooldown_seconds"
@@ -113,34 +107,6 @@ class MessagingSettingsSessionManager: ObservableObject {
     var conversationLimitCooldownStartTime: Int64 {
         get { defaults.object(forKey: Keys.conversationLimitCooldownStartTime) as? Int64 ?? 0 }
         set { defaults.set(newValue, forKey: Keys.conversationLimitCooldownStartTime) }
-    }
-    
-    // MARK: - Refresh Limit Properties
-    
-    var freeRefreshLimit: Int {
-        get { 
-            let value = defaults.integer(forKey: Keys.freeRefreshLimit)
-            return value > 0 ? value : 10 // Default to 10 refreshes
-        }
-        set { defaults.set(newValue, forKey: Keys.freeRefreshLimit) }
-    }
-    
-    var freeRefreshCooldownSeconds: TimeInterval {
-        get { 
-            let value = defaults.double(forKey: Keys.freeRefreshCooldownSeconds)
-            return value > 0 ? value : 180 // Default to 3 minutes
-        }
-        set { defaults.set(newValue, forKey: Keys.freeRefreshCooldownSeconds) }
-    }
-    
-    var refreshUsageCount: Int {
-        get { defaults.integer(forKey: Keys.refreshUsageCount) }
-        set { defaults.set(newValue, forKey: Keys.refreshUsageCount) }
-    }
-    
-    var refreshLimitCooldownStartTime: Int64 {
-        get { defaults.object(forKey: Keys.refreshLimitCooldownStartTime) as? Int64 ?? 0 }
-        set { defaults.set(newValue, forKey: Keys.refreshLimitCooldownStartTime) }
     }
     
     // MARK: - Filter Limit Properties

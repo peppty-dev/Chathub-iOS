@@ -84,7 +84,14 @@ class BaseFeatureLimitManager: FeatureLimitManager {
         }
         
         // If over limit, check if cooldown has expired
-        return !isInCooldown()
+        if !isInCooldown() {
+            // Cooldown has expired, reset usage count for fresh start
+            AppLogger.log(tag: "LOG-APP: BaseFeatureLimitManager", message: "canPerformAction() - Cooldown expired, resetting usage count from \(currentUsage) to 0")
+            resetCooldown()
+            return true
+        }
+        
+        return false
     }
     
     /// Check if user is within new user grace period
@@ -107,8 +114,8 @@ class BaseFeatureLimitManager: FeatureLimitManager {
         let currentUsage = getCurrentUsageCount()
         setUsageCount(currentUsage + 1)
         
-        // Only start cooldown when we exceed the limit (not when we reach it)
-        if currentUsage + 1 > getLimit() && !isInCooldown() {
+        // Start cooldown when we reach the limit 
+        if currentUsage + 1 >= getLimit() && !isInCooldown() {
             startCooldown()
         }
     }

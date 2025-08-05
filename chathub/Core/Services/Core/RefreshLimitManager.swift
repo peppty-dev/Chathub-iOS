@@ -46,6 +46,12 @@ class RefreshLimitManager: BaseFeatureLimitManager {
     
     /// Check if refresh action can be performed and return detailed result
     func checkRefreshLimit() -> FeatureLimitResult {
+        // Check if cooldown has expired and auto-reset if needed
+        if isInCooldown() && getRemainingCooldown() <= 0 {
+            AppLogger.log(tag: "LOG-APP: RefreshLimitManager", message: "checkRefreshLimit() - Cooldown expired, auto-resetting usage count")
+            resetCooldown()
+        }
+        
         let currentUsage = getCurrentUsageCount()
         let limit = getLimit()
         let remainingCooldown = getRemainingCooldown()
@@ -54,8 +60,12 @@ class RefreshLimitManager: BaseFeatureLimitManager {
         let isLightSubscriber = subscriptionSessionManager.isUserSubscribedToLite()
         let isNewUserInFreePeriod = isNewUser()
         
+        // Debug logging to understand user categorization
+        AppLogger.log(tag: "LOG-APP: RefreshLimitManager", message: "checkRefreshLimit() - isLiteSubscriber: \(isLightSubscriber), isNewUser: \(isNewUserInFreePeriod), currentUsage: \(currentUsage), limit: \(limit)")
+        
         // Light subscribers and new users bypass popup entirely
         if isLightSubscriber || isNewUserInFreePeriod {
+            AppLogger.log(tag: "LOG-APP: RefreshLimitManager", message: "checkRefreshLimit() - User bypassing popup (Lite: \(isLightSubscriber), New: \(isNewUserInFreePeriod))")
             return FeatureLimitResult(
                 canProceed: true,
                 showPopup: false,
@@ -65,11 +75,13 @@ class RefreshLimitManager: BaseFeatureLimitManager {
             )
         }
         
-        // For all other users, show popup only when they exceed their limit
+        // For all other users, always show popup (to display refresh count or timer)
         let canProceed = canPerformAction()
         
-        // Only show popup when user has reached or exceeded their limit
-        let shouldShowPopup = currentUsage >= limit
+        // Always show popup for non-Lite/non-new users to display progress
+        let shouldShowPopup = true
+        
+        AppLogger.log(tag: "LOG-APP: RefreshLimitManager", message: "checkRefreshLimit() - Showing popup with currentUsage: \(currentUsage), limit: \(limit), isLimitReached: \(currentUsage >= limit), canProceed: \(canProceed)")
         
         return FeatureLimitResult(
             canProceed: canProceed,
@@ -116,7 +128,7 @@ class RefreshLimitManager: BaseFeatureLimitManager {
             AppLogger.log(tag: "LOG-APP: RefreshLimitManager", message: "performRefresh() Refresh performed. Usage: \(getCurrentUsageCount())/\(getLimit())")
             completion(true)
         } else {
-            // Track blocked refresh
+            // Track blocked refresh (cooldown already started in checkRefreshLimit)
             if isInCooldown() {
                 RefreshAnalytics.shared.trackRefreshBlockedCooldown(
                     remainingCooldown: result.remainingCooldown,
@@ -124,11 +136,6 @@ class RefreshLimitManager: BaseFeatureLimitManager {
                     limit: getLimit()
                 )
             } else {
-                // Start cooldown when user first exceeds limit
-                if getCurrentUsageCount() >= getLimit() && !isInCooldown() {
-                    startCooldown()
-                }
-                
                 RefreshAnalytics.shared.trackRefreshBlockedLimitReached(
                     currentUsage: getCurrentUsageCount(),
                     limit: getLimit(),
@@ -144,6 +151,9 @@ class RefreshLimitManager: BaseFeatureLimitManager {
     /// Reset refresh usage (for testing or admin purposes)
     func resetRefreshUsage() {
         AppLogger.log(tag: "LOG-APP: RefreshLimitManager", message: "resetRefreshUsage() Resetting refresh usage and cooldown")
+        setUsageCount(0)
         resetCooldown()
     }
+    
+
 }

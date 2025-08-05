@@ -2,11 +2,39 @@
 
 ## Executive Summary
 
-The ChatHub iOS Refresh Feature is a sophisticated freemium monetization system that strategically balances user engagement with subscription conversion through a three-tier permission architecture designed to maximize Lite subscription upgrades while ensuring excellent user experience across all segments. The system operates through a centralized RefreshLimitManager extending BaseFeatureLimitManager, which evaluates every refresh request through a priority-based decision tree that first checks Lite subscription status via SubscriptionSessionManager.isUserSubscribedToLite(), then validates new user status by comparing current time against UserSessionManager.firstAccountCreatedTime and configurable newUserFreePeriodSeconds (typically 2-7 hours), with Lite subscribers and new users receiving unlimited refresh privileges while regular free users encounter an innovative "always-show popup" strategy that displays RefreshLimitPopupView on every refresh attempt regardless of current limit status. This popup contains a dynamic refresh button that transforms based on usage state - showing "Refresh Users" with green gradient when under the 2-refresh limit or "Refresh Available In [timer]" with gray disabled appearance and animated progress bar during the 2-minute cooldown period - alongside a subscription promotion button displaying real-time pricing from SubscriptionsManagerStoreKit2 with purple gradient and crown iconography. The technical implementation employs sophisticated time-based calculations using Unix timestamps stored in SessionManager via UserDefaults, tracking refreshUsageCount and refreshLimitCooldownStartTime with automatic reset mechanisms, while the new user detection algorithm examines device-level firstAccountCreatedTime to prevent abuse while providing genuine newcomers extended exploration periods. The system integrates comprehensive Firebase Analytics tracking through RefreshAnalytics service that captures detailed conversion funnel metrics including button taps, popup interactions, subscription intents, user segmentation bypass events, and system-level cooldown/reset activities, providing rich contextual parameters for each event such as user type, usage counts, remaining cooldowns, pricing displays, time spent in popups, and conversion funnel progression steps. The analytics implementation uses iOS-specific naming conventions with `ios_` prefixes for all events and parameters to ensure clear platform separation in Firebase console, follows established SubscriptionAnalytics patterns, and enables real-time business intelligence for optimizing limit values, cooldown durations, popup messaging, and pricing strategies through detailed user behavior analysis across all three user segments. The system includes comprehensive error handling for network failures, time synchronization issues, and device manipulation attempts, maintains persistent state across app launches, supports Firebase Remote Config for dynamic limit adjustments enabling A/B testing, and creates a balanced ecosystem that provides clear value to all user segments while establishing natural upgrade touchpoints that drive sustainable revenue growth through strategic psychological design, technical precision, and data-driven optimization.
+The ChatHub iOS Refresh Feature is a sophisticated freemium monetization system that strategically balances user engagement with subscription conversion through a three-tier permission architecture designed to maximize Lite subscription upgrades while ensuring excellent user experience across all segments. The system operates through a centralized RefreshLimitManager extending BaseFeatureLimitManager, which evaluates every refresh request through a priority-based decision tree that first checks Lite subscription status via SubscriptionSessionManager.isUserSubscribedToLite(), then validates new user status by comparing current time against UserSessionManager.firstAccountCreatedTime and configurable newUserFreePeriodSeconds (typically 2-7 hours), with Lite subscribers and new users receiving unlimited refresh privileges while regular free users encounter an innovative "always-show popup" strategy that displays RefreshLimitPopupView on every refresh attempt regardless of current limit status. This popup shows either a refresh button with remaining count (e.g., "3 left") when under the refresh limit, or completely hides the refresh button during cooldown and instead shows a standalone progress bar with "Time remaining: X:XX" text alongside a subscription promotion button displaying real-time pricing from SubscriptionsManagerStoreKit2 with purple gradient and crown iconography. The technical implementation employs sophisticated time-based calculations using Unix timestamps stored in SessionManager via UserDefaults, tracking refreshUsageCount and refreshLimitCooldownStartTime with automatic reset mechanisms, while the new user detection algorithm examines device-level firstAccountCreatedTime to prevent abuse while providing genuine newcomers extended exploration periods. The system integrates comprehensive Firebase Analytics tracking through RefreshAnalytics service that captures detailed conversion funnel metrics including button taps, popup interactions, subscription intents, user segmentation bypass events, and system-level cooldown/reset activities, providing rich contextual parameters for each event such as user type, usage counts, remaining cooldowns, pricing displays, time spent in popups, and conversion funnel progression steps. The analytics implementation uses iOS-specific naming conventions with `ios_` prefixes for all events and parameters to ensure clear platform separation in Firebase console, follows established SubscriptionAnalytics patterns, and enables real-time business intelligence for optimizing limit values, cooldown durations, popup messaging, and pricing strategies through detailed user behavior analysis across all three user segments. The system includes comprehensive error handling for network failures, time synchronization issues, and device manipulation attempts, maintains persistent state across app launches, supports Firebase Remote Config for dynamic limit adjustments enabling A/B testing, and creates a balanced ecosystem that provides clear value to all user segments while establishing natural upgrade touchpoints that drive sustainable revenue growth through strategic psychological design, technical precision, and data-driven optimization.
 
 ## 1. Overview
 
 This document describes the **current implementation** of the Refresh Feature in the ChatHub iOS application. The feature allows users to manually refresh online user lists and notifications, implementing a freemium model with usage limits for non-premium users and unlimited access for subscribers.
+
+### 1.1 Recent Implementation Updates
+
+**Key Enhancement (Latest)**: The popup UI has been optimized for better conversion during cooldown periods:
+
+#### 1.1.1 Conditional UI States
+- **Available State**: Shows refresh button with remaining count + subscription button + general description
+- **Cooldown State**: Hides refresh button, shows progress bar + "Time remaining" text + subscription button only + specific limit-reached description
+
+#### 1.1.2 Enhanced Conversion Focus
+- **Eliminates Competing CTA**: During cooldown, removes refresh button to focus attention on subscription
+- **Visual Progress Indication**: Thin horizontal progress bar (4px height) shows countdown progress, decreasing from right to left as time runs out
+- **Contextual Messaging**: Description changes to explain current state and available options
+- **Clear Time Communication**: "Time remaining: X:XX" provides precise countdown information
+- **Consistent Spacing**: Uniform 24pt spacing between all major sections for professional appearance
+
+#### 1.1.3 Technical Improvements
+- **Progress Bar Direction**: Fixed to decrease from right to left (time running out) instead of increasing left to right
+- **Spacing Consistency**: Standardized to 24pt spacing between all major sections (title, progress, buttons)
+- **Simplified Structure**: Reduced nested VStack containers for cleaner code and consistent 12pt internal spacing
+- **Visual Polish**: 4px height progress bar with smooth linear animation and proper corner radius
+
+#### 1.1.4 Strategic Benefits
+- **Better Conversion Rates**: Single CTA during peak frustration moment (cooldown)
+- **Improved User Understanding**: Clear state-specific messaging and visual indicators
+- **Maintained Fairness**: Users still get their free refreshes when available
+- **Enhanced UX**: Visual progress indication makes waiting time feel more manageable
+- **Professional Appearance**: Consistent spacing and animations create polished user experience
 
 ## 2. Current Architecture
 
@@ -51,12 +79,13 @@ struct FeatureLimitResult {
 
 #### 2.2.1 SessionManager
 - **Location**: `chathub/Core/Services/Core/SessionManager.swift`
-- **Purpose**: Stores refresh limit configuration values
+- **Purpose**: Centralized storage for all refresh limit configuration values and state
 - **Key Properties**:
-  - `freeRefreshLimit: Int` (default: 2 refreshes)
-  - `freeRefreshCooldownSeconds: TimeInterval` (default: 120 seconds / 2 minutes)
+  - `freeRefreshLimit: Int` (default: 2 refreshes, overrideable by Firebase)
+  - `freeRefreshCooldownSeconds: TimeInterval` (default: 120 seconds / 2 minutes, overrideable by Firebase)
   - `refreshUsageCount: Int` (current usage counter)
   - `refreshLimitCooldownStartTime: Int64` (cooldown start timestamp)
+- **Note**: All refresh-related configuration is centralized here. MessagingSettingsSessionManager handles only messaging limits.
 
 #### 2.2.2 Configuration Keys
 ```swift
@@ -90,13 +119,21 @@ static let refreshLimitCooldownStartTime = "refresh_limit_cooldown_start_time"
 - **Design Elements**:
   - **Background**: Enhanced contrast with darker overlay (0.6 opacity) and bordered popup with subtle shadow for better distinction from parent view
   - **Static Title**: "Refresh Users" (never changes regardless of limit status)
-  - **Static Description**: "Refresh the user list to see new online users and get fresh connection opportunities." (never changes)
-  - **Dynamic Refresh Button Only**: Timer and status information only appears inside the refresh button, not in separate UI elements
+  - **Dynamic Description**: Changes based on limit status:
+    - Normal state: "Refresh the user list to see new online users. Upgrade to ChatHub Lite subscription to unlock unlimited refreshes."
+    - Cooldown state: "You've used your X free refreshes. Subscribe to ChatHub Lite for unlimited access or wait for the timer to reset."
+  - **Conditional UI Elements**:
+    - **When refreshes available**: Shows refresh button with remaining count + subscription button
+    - **During cooldown**: Hides refresh button, shows progress bar + "Time remaining" text + subscription button only
   - **Buttons**:
-    - **Dynamic Refresh Button**: 
-      - Available state: "Refresh Users" with green gradient background
-      - Cooldown state: "Refresh Available In [timer]" with gray background, disabled state, and animated progress bar
+    - **Refresh Button** (only shown when not in cooldown): 
+      - "Refresh Users" with green gradient background and remaining count (e.g., "3 left")
+      - Completely hidden during cooldown period
     - **Subscription Button**: "Subscribe to ChatHub Lite" with matching Lite subscription gradient (liteGradientStart/liteGradientEnd) and star.circle.fill icon, includes weekly pricing display
+  - **Progress Indicator** (only during cooldown):
+    - Thin horizontal progress bar (4px height) showing countdown progress, decreasing from right to left
+    - "Time remaining: X:XX" text display with live countdown
+    - Consistent 24pt spacing between all sections
 
 ### 3.3 Popup Display Logic
 
@@ -111,24 +148,57 @@ if result.showPopup {
 }
 ```
 
-### 3.3.2 Dynamic Refresh Button Implementation
+### 3.3.2 Conditional UI Implementation
 ```swift
-// In RefreshLimitPopupView.swift - Button changes based on limit status
-if isLimitReached && remainingTime > 0 {
-    // Show timer when limit is reached
-    VStack(spacing: 2) {
-        Text("Refresh Available In")
-            .font(.subheadline)
-            .fontWeight(.medium)
-        Text(formatTime(remainingTime))
-            .font(.headline)
-            .fontWeight(.bold)
+// In RefreshLimitPopupView.swift - UI changes based on limit status
+
+// Dynamic description text
+private func getDescriptionText() -> String {
+    if isLimitReached && remainingTime > 0 {
+        // During cooldown - show specific limit reached message
+        return "You've used your \(limit) free refreshes. Subscribe to ChatHub Lite for unlimited access or wait for the timer to reset."
+    } else {
+        // Normal state - show general description
+        return "Refresh the user list to see new online users. Upgrade to ChatHub Lite subscription to unlock unlimited refreshes."
     }
-} else {
-    // Show normal refresh text when available
-    Text("Refresh Users")
-        .font(.headline)
-        .fontWeight(.semibold)
+}
+
+// Progress bar and time remaining (only during cooldown)
+if isLimitReached && remainingTime > 0 {
+    VStack(spacing: 12) {
+        // Progress bar - decreases from right to left as time runs out
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                // Background bar
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+                    .frame(height: 4)
+                    .cornerRadius(2)
+                
+                // Progress bar - shrinks from right to left
+                Rectangle()
+                    .fill(Color("blue"))
+                    .frame(width: geometry.size.width * CGFloat(remainingTime / totalCooldownDuration), height: 4)
+                    .cornerRadius(2)
+                    .animation(.linear(duration: 0.1), value: remainingTime)
+            }
+        }
+        .frame(height: 4)
+        
+        // Time remaining text
+        Text("Time remaining: \(formatTime(remainingTime))")
+            .font(.system(size: 14, weight: .medium))
+            .foregroundColor(Color("shade_800"))
+    }
+    .padding(.horizontal, 24)
+    .padding(.top, 24)  // Consistent 24pt spacing with other sections
+}
+
+// Refresh Button - only show when not in cooldown
+if !(isLimitReached && remainingTime > 0) {
+    Button(action: refreshAction) {
+        // Refresh button content
+    }
 }
 ```
 
@@ -182,7 +252,7 @@ private func isNewUser() -> Bool {
 
 ### 4.3 Always-Show Popup Logic
 ```swift
-// In RefreshLimitManager.swift (lines 48-78)
+// In RefreshLimitManager.swift (updated logic)
 func checkRefreshLimit() -> FeatureLimitResult {
     let currentUsage = getCurrentUsageCount()
     let limit = getLimit()
@@ -203,19 +273,21 @@ func checkRefreshLimit() -> FeatureLimitResult {
         )
     }
     
-            // For all other users, show popup only when they exceed their limit
-        let canProceed = canPerformAction()
-        
-        // Only show popup when user has reached or exceeded their limit
-        let shouldShowPopup = currentUsage >= limit
-        
-        return FeatureLimitResult(
-            canProceed: canProceed,
-            showPopup: shouldShowPopup,
-            remainingCooldown: remainingCooldown,
-            currentUsage: currentUsage,
-            limit: limit
-        )
+    // For all other users, always show popup (to display refresh count or timer)
+    let canProceed = canPerformAction()
+    
+    // Always show popup for non-Lite/non-new users to display progress
+    let shouldShowPopup = true
+    
+    // Note: Cooldown starts only when actual refresh is performed via incrementUsage()
+    
+    return FeatureLimitResult(
+        canProceed: canProceed,
+        showPopup: shouldShowPopup,
+        remainingCooldown: remainingCooldown,
+        currentUsage: currentUsage,
+        limit: limit
+    )
 }
 ```
 
@@ -226,7 +298,7 @@ func incrementUsage() {
     let currentUsage = getCurrentUsageCount()
     setUsageCount(currentUsage + 1)
     
-    // If this puts us over the limit, start cooldown
+    // Start cooldown when we reach the limit 
     if currentUsage + 1 >= getLimit() && !isInCooldown() {
         startCooldown()
     }
@@ -236,12 +308,15 @@ func incrementUsage() {
 ## 5. Current Default Configuration Values
 
 ### 5.1 Hardcoded Defaults (SessionManager)
-- **Free Refresh Limit**: 2 refreshes per cooldown period
-- **Cooldown Duration**: 120 seconds (2 minutes)
+- **Free Refresh Limit**: 2 refreshes per cooldown period (can be overridden by Firebase configuration)
+- **Cooldown Duration**: 120 seconds (2 minutes) (can be overridden by Firebase configuration)
 - **Usage Counter**: Starts at 0, increments with each refresh
 - **Cooldown Start Time**: Unix timestamp when limit is reached
 
-### 5.2 Fallback Logic
+### 5.2 Firebase Configuration Override
+The refresh limit values can be dynamically configured via Firebase Remote Config through `AppSettingsService`. When Firebase provides a `freeRefreshLimit` value (e.g., 5), it overrides the hardcoded default of 2, ensuring users get exactly that many free refreshes before seeing the popup.
+
+### 5.3 Fallback Logic
 ```swift
 // Default values when UserDefaults is empty (in SessionManager)
 var freeRefreshLimit: Int {
@@ -501,7 +576,7 @@ AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "refreshButtonTapped() S
 ### 13.2 Consistent Design
 - **Background**: System background with corner radius and shadow
 - **Buttons**: Consistent styling across all refresh-related popups
-- **Timer Animation**: Live countdown with visual progress indication
+- **Timer Display**: Live countdown with clean progress indication
 
 ## 14. Current Integration Dependencies
 
@@ -644,9 +719,14 @@ Each event includes rich contextual parameters with iOS-specific prefixes:
 5. **Timer/Pricing**: `.system(size: 14, weight: .medium)` - dynamic information - subtle hierarchy
 
 ### 18.2 Content Strategy
-- **Static Information**: Title and description never change to provide consistent user understanding
-- **Dynamic Elements**: Only the refresh button changes state to show timer and availability
-- **No Misleading Content**: Descriptions don't manipulate users with changing limit information
+- **Static Title**: "Refresh Users" title never changes to provide consistent user understanding
+- **Dynamic Description**: Changes based on user state:
+  - Available state: General refresh and upgrade messaging
+  - Cooldown state: Specific limit reached messaging with clear options
+- **Contextual UI Elements**: 
+  - Shows refresh button + subscription button when refreshes available
+  - Shows progress bar + time remaining + subscription button only during cooldown
+- **Clear Value Proposition**: Descriptions provide specific information about current state and available options
 
 ### 18.3 Button Design Consistency
 - **Subscription Button**: Uses exact same gradient and icon as main subscription views for brand consistency
@@ -654,92 +734,56 @@ Each event includes rich contextual parameters with iOS-specific prefixes:
 - **Color Gradients**: Lite subscription uses `liteGradientStart` and `liteGradientEnd` colors
 - **Icon Consistency**: `star.circle.fill` matches subscription status buttons throughout the app
 
-### 18.4 Smart Limit Logic
-- **Correct Usage Flow**: With limit=2, users can complete 2 refreshes without any restrictions
-- **Popup Timing**: Shows only when user attempts 3rd refresh (`currentUsage >= limit`)
-- **Cooldown Activation**: Cooldown starts when user first exceeds limit, not during successful refreshes
-- **No Premature Blocking**: Users get full use of their allocated refreshes before any restrictions
+### 18.4 Smart Limit Logic with Conditional UI Display
+- **Always-Show Strategy**: Popup appears for all refresh attempts by non-Lite/non-new users to show progress and conversion opportunity
+- **Contextual Interface**: UI adapts based on user state:
+  - **Available State**: Shows refresh button with remaining count (e.g., "3 left") + subscription button
+  - **Cooldown State**: Hides refresh button, shows progress bar + "Time remaining" text + subscription button only
+- **Enhanced Conversion Focus**: During cooldown, removes competing CTA (refresh button) to focus user attention on subscription
+- **Visual Progress Indication**: Thin horizontal progress bar (4px height) shows countdown progress, decreasing from right to left during cooldown
+- **Clear State Communication**: "Time remaining: X:XX" text provides precise countdown information
+- **Seamless State Transitions**: UI smoothly transitions between available and cooldown states
+- **Automatic Reset**: When cooldown expires, usage count automatically resets to 0 and UI returns to available state
+- **Enhanced UX**: Users always understand their current state and available options
 
 #### Detailed Flow with Limit=2:
-1. **1st Refresh**: `currentUsage=0` → Proceed, increment to 1, no popup
-2. **2nd Refresh**: `currentUsage=1` → Proceed, increment to 2, no popup  
-3. **3rd Attempt**: `currentUsage=2` → Show popup (no timer yet), block action
-4. **User Clicks Refresh in Popup**: Start cooldown, show timer for future attempts
+1. **1st Attempt**: `currentUsage=0` → Show popup with "2 left" refresh button + subscription button, allow refresh, increment to 1
+2. **2nd Attempt**: `currentUsage=1` → Show popup with "1 left" refresh button + subscription button, allow refresh, increment to 2  
+3. **3rd Attempt**: `currentUsage=2` → Hide refresh button, show progress bar + "Time remaining: 2:00" + subscription button only, cooldown starts, block refresh action
+4. **Timer Countdown**: User sees progress bar filling and "Time remaining: X:XX" counting down, only subscription button available
+5. **Timer Expires**: Usage count automatically resets to 0, progress bar disappears, popup shows "2 left" refresh button again
+6. **Fresh Start**: User can now perform 2 more refreshes with full visual feedback
 
-### 18.5 Advanced Liquid Animation System
-- **Dual Animation Architecture**: Combines countdown progress (left-to-right shrinking) with realistic liquid wave effects for premium user experience
-- **Progress Bar Foundation**: Gray overlay anchored to left edge shrinks rightward as time decreases, revealing green gradient from right side
-- **Psychologically Correct Direction**: Left-to-right shrinking animation mirrors mental model of countdown timers (time draining away, not increasing)
+#### Detailed Flow with Limit=5 (Firebase Configuration Example):
+1. **1st Attempt**: `currentUsage=0` → Show popup with "5 left" refresh button + subscription button, allow refresh, increment to 1
+2. **2nd Attempt**: `currentUsage=1` → Show popup with "4 left" refresh button + subscription button, allow refresh, increment to 2
+3. **3rd Attempt**: `currentUsage=2` → Show popup with "3 left" refresh button + subscription button, allow refresh, increment to 3
+4. **4th Attempt**: `currentUsage=3` → Show popup with "2 left" refresh button + subscription button, allow refresh, increment to 4
+5. **5th Attempt**: `currentUsage=4` → Show popup with "1 left" refresh button + subscription button, allow refresh, increment to 5
+6. **6th Attempt**: `currentUsage=5` → Hide refresh button, show progress bar + "Time remaining: 2:00" + subscription button only, cooldown starts, block refresh action
+7. **Timer Countdown**: User sees progress bar filling and "Time remaining: X:XX" counting down, only subscription button available
+8. **Timer Expires**: Usage count automatically resets to 0, progress bar disappears, popup shows "5 left" refresh button again
+9. **Fresh Start**: User can now perform 5 more refreshes with full visual feedback
 
-#### 18.5.1 Wave Animation Components
-- **WaveProgressView**: Custom SwiftUI component using Path and Timer-based animation for realistic liquid edge effects
-- **Directional Wave Flow**: Sine wave patterns flow vertically along right edge with bidirectional oscillation (up-to-down, then down-to-up)
-- **Individual Wave Heights**: Each wave position has independent height oscillation ranging from 50% to 130% of base height (1px to 2.6px)
-- **Dual Animation Cycles**: Directional flow and height variations operate on different time scales for complex, natural patterns
-
-#### 18.5.2 Wave Animation Parameters
-- **Base Wave Height**: 2px for subtle, professional appearance
-- **Wave Length**: 20px spacing between wave peaks for multiple visible waves
-- **Update Frequency**: 60 FPS (0.016s intervals) for butterscotch-smooth animation
-- **Directional Speed**: 0.125 increment per frame for moderate oscillation pace
-- **Height Time Scale**: 0.5x directional speed for slower, independent height changes
-- **Wave Count**: Approximately 2-3 complete wave cycles visible simultaneously
-
-#### 18.5.3 Oscillation Behavior
-- **Bidirectional Flow**: Waves flow from top-to-bottom, then reverse to bottom-to-top in π to -π range cycles
-- **Individual Height Cycles**: Each wave position uses unique phase offset (y/waveLength * 3.0) for staggered height animations
-- **Natural Liquid Motion**: Combined directional flow + height variations create realistic liquid draining effect
-- **Continuous Animation**: No pauses or stops - waves continuously flow and height-oscillate throughout cooldown
-
-#### 18.5.4 Technical Implementation
-- **Timer-Based Animation**: Uses `Timer.scheduledTimer` for precise control independent of SwiftUI animation system
-- **Path-Based Rendering**: Custom Path construction with sine wave calculations for smooth curves
-- **Memory Management**: Proper timer cleanup in `onDisappear` to prevent memory leaks
-- **Performance Optimized**: 60 FPS updates with minimal computational overhead
-
-#### 18.5.5 Animation Evolution & Refinements
-The liquid animation system underwent multiple iterations to achieve the current sophisticated implementation:
-
-**Phase 1 - Basic Progress Bar**:
-- Simple gray rectangle shrinking with linear animation
-- Static visual with no liquid characteristics
-
-**Phase 2 - Initial Wave Implementation**:
-- Added basic sine wave pattern to right edge
-- Single global wave animation with uniform height
-- Animation issues: choppy movement, wrong direction
-
-**Phase 3 - Direction Correction**:
-- Fixed animation direction to proper left-to-right shrinking
-- Corrected visual flow to match countdown psychology
-- Improved smoothness with optimized timing
-
-**Phase 4 - Smooth Animation**:
-- Increased update frequency from 1.0s to 0.1s intervals (10x smoother)
-- Changed from 1.0s linear animation to 0.2s easeInOut for fluidity
-- Created "butterscotch-smooth" countdown experience
-
-**Phase 5 - Enhanced Wave Motion**:
-- Added bidirectional wave oscillation (forward/backward flow)
-- Implemented proper vertical wave movement instead of horizontal shifting
-- Multiple wave cycles for realistic liquid appearance
-
-**Phase 6 - Speed Optimization**:
-- Reduced oscillation speed by 50% for comfortable viewing
-- Balanced wave frequency and amplitude for professional appearance
-- Fine-tuned animation parameters for optimal user experience
-
-**Phase 7 - Individual Wave Heights**:
-- Implemented position-based height variation for each wave
-- Added time-dependent height oscillation independent of directional flow
-- Created complex, natural liquid patterns with staggered wave animations
-
-**Final Result**: Premium liquid draining animation combining multiple sophisticated effects for industry-leading countdown user experience.
+### 18.5 Enhanced Visual Design
+- **Clean Button Design**: Simple green gradient background without overlays or disabled states
+- **Dark Vibrant Green Gradient**: Deep forest green to SuccessGreen gradient for strong visual impact and clarity
+- **Enhanced Background Contrast**: Darker background overlay (60% black) for better popup visibility
+- **Refined Border Treatment**: Subtle white border (15% opacity) instead of heavy separator lines
+- **Pill-Shaped Backgrounds**: Semi-transparent white pill backgrounds (25% opacity) for timer, refresh count, and pricing display
+- **Design Consistency**: Matches subscription view styling with rounded corner pills and optimized opacity levels
+- **Improved Messaging**: Description text combines functional explanation with clear upgrade benefits
+- **Conversion Optimization**: Focused messaging that directly connects feature limitation to subscription benefits
+- **Clear Call-to-Action**: Mentions "chathub Lite subscription" and "unlimited refreshes" without unnecessary fluff
+- **Enhanced Readability**: White text on pill backgrounds improves contrast and visual hierarchy
+- **Progress Count Display**: Remaining refresh count (e.g., "3 left") in elegant pill containers
+- **Subscription Pricing**: Weekly pricing in pill background matching main subscription view patterns
+- **Simplified State Management**: Refresh button completely hidden during cooldown instead of disabled overlay animations
 
 ### 18.6 Manual Action Requirement
 - **No Auto-Refresh**: When countdown completes, popup remains open waiting for user action
 - **Manual Trigger**: User must explicitly click refresh button even after cooldown expires
-- **Visual State Change**: Button appearance changes from disabled/timer to enabled/green when ready
+- **Visual State Change**: Refresh button reappears when cooldown expires
 - **User Control**: Ensures users have full control over when refresh action occurs
 
 ### 18.7 Structured Button Layout Design

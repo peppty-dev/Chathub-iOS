@@ -16,6 +16,8 @@ struct RefreshLimitPopupView: View {
     @State private var popupStartTime: Date = Date()
     private let totalCooldownDuration: TimeInterval
     
+
+    
     // Pricing information for Lite subscription
     private func getLiteSubscriptionPrice() -> String? {
         let subscriptionsManager = SubscriptionsManagerStoreKit2.shared
@@ -52,7 +54,7 @@ struct RefreshLimitPopupView: View {
     var body: some View {
         ZStack {
             // Background overlay - tap to dismiss with enhanced contrast
-            Color.black.opacity(0.4)
+            Color.black.opacity(0.6)
                 .ignoresSafeArea()
                 .onTapGesture {
                     AppLogger.log(tag: "LOG-APP: RefreshLimitPopupView", message: "backgroundTapped() Dismissing popup")
@@ -80,7 +82,7 @@ struct RefreshLimitPopupView: View {
                             .foregroundColor(Color("dark"))
                             .multilineTextAlignment(.center)
                         
-                        Text("Refresh the user list to see new online users and get fresh connection opportunities.")
+                        Text(getDescriptionText())
                             .font(.system(size: 14))
                             .foregroundColor(Color("shade_800"))
                             .multilineTextAlignment(.center)
@@ -88,10 +90,42 @@ struct RefreshLimitPopupView: View {
                     .padding(.horizontal, 24)
                     .padding(.top, 24)
                     
+                    // Progress bar and time remaining when in cooldown
+                    if isLimitReached && remainingTime > 0 {
+                        VStack(spacing: 12) {
+                            // Progress bar
+                            GeometryReader { geometry in
+                                ZStack(alignment: .leading) {
+                                    // Background bar
+                                    Rectangle()
+                                        .fill(Color.gray.opacity(0.3))
+                                        .frame(height: 4)
+                                        .cornerRadius(2)
+                                    
+                                    // Progress bar - decreases from right to left as time runs out
+                                    Rectangle()
+                                        .fill(Color("blue"))
+                                        .frame(width: geometry.size.width * CGFloat(remainingTime / totalCooldownDuration), height: 4)
+                                        .cornerRadius(2)
+                                        .animation(.linear(duration: 0.1), value: remainingTime)
+                                }
+                            }
+                            .frame(height: 4)
+                            
+                            // Time remaining text
+                            Text("Time remaining: \(formatTime(remainingTime))")
+                                .font(.system(size: 14, weight: .medium))
+                                .foregroundColor(Color("shade_800"))
+                        }
+                        .padding(.horizontal, 24)
+                        .padding(.top, 24)
+                    }
+                    
                     // Buttons
                     VStack(spacing: 12) {
-                        // Refresh Button - changes based on limit status
-                                                Button(action: refreshAction) {
+                        // Refresh Button - only show when not in cooldown
+                        if !(isLimitReached && remainingTime > 0) {
+                            Button(action: refreshAction) {
                             HStack(spacing: 0) {
                                 // Left side - icon and text (always consistent)
                                 HStack(spacing: 8) {
@@ -104,17 +138,44 @@ struct RefreshLimitPopupView: View {
                                 
                                 Spacer()
                                 
-                                // Right side - timer when in cooldown, invisible text when not
+                                // Right side - timer when in cooldown, refresh count when available
                                 if isLimitReached && remainingTime > 0 {
+                                    // Show timer during cooldown with pill background
                                     Text(formatTime(remainingTime))
-                                        .font(.system(size: 14, weight: .bold))
+                                        .font(.system(size: 12, weight: .bold))
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 10)
+                                                .fill(Color.white.opacity(0.25))
+                                        )
                                         .padding(.trailing, 8)
                                 } else {
-                                    // Invisible text to maintain button height consistency
-                                    Text("00:00")
-                                        .font(.system(size: 14, weight: .bold))
-                                        .opacity(0)
-                                        .padding(.trailing, 8)
+                                    // Show remaining refreshes when not in cooldown or when timer expired
+                                    // This handles both cases: !isLimitReached and (isLimitReached && remainingTime <= 0)
+                                    let remaining = max(0, limit - currentUsage)
+                                    
+                                    if remaining > 0 || remainingTime <= 0 {
+                                        Text("\(remaining > 0 ? remaining : limit) left")
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundColor(.white)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 10)
+                                                    .fill(Color.white.opacity(0.25))
+                                            )
+                                            .padding(.trailing, 8)
+                                    } else {
+                                        // Invisible text to maintain button height consistency (rare edge case)
+                                        Text("00:00")
+                                            .font(.system(size: 12, weight: .bold))
+                                            .opacity(0)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .padding(.trailing, 8)
+                                    }
                                 }
                             }
                             .foregroundColor(.white)
@@ -122,34 +183,19 @@ struct RefreshLimitPopupView: View {
                             .frame(minHeight: 56)
                             .padding(.horizontal, 12)
                             .background(
-                                ZStack {
-                                    // Base background - prominent green gradient revealed as countdown overlay shrinks
-                                    LinearGradient(
-                                        gradient: Gradient(colors: [Color.green.opacity(0.9), Color.green.opacity(0.6)]),
-                                        startPoint: .leading,
-                                        endPoint: .trailing
-                                    )
-                                    
-                                    // Countdown overlay when in cooldown - shrinks from left to right revealing green gradient
-                                    if isLimitReached && remainingTime > 0 {
-                                        GeometryReader { geometry in
-                                            // Gray overlay anchored to left side that shrinks leftward as time decreases
-                                            HStack(spacing: 0) {
-                                                // Gray overlay with wave edge effect
-                                                WaveProgressView(
-                                                    progress: CGFloat(remainingTime / totalCooldownDuration),
-                                                    totalWidth: geometry.size.width,
-                                                    height: geometry.size.height
-                                                )
-                                                Spacer()
-                                            }
-                                        }
-                                    }
-                                }
+                                // Simple green gradient background
+                                LinearGradient(
+                                    gradient: Gradient(colors: [
+                                        Color(red: 0.08, green: 0.55, blue: 0.22),  // Dark forest green
+                                        Color("SuccessGreen")  // Slightly lighter green for contrast
+                                    ]),
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
                             )
                             .cornerRadius(12)
                         }
-                        .disabled(isLimitReached && remainingTime > 0)
+                        }
                         
                         // Lite Subscription Button with matching gradient
                         Button(action: upgradeToPremiumAction) {
@@ -165,16 +211,25 @@ struct RefreshLimitPopupView: View {
                                 
                                 Spacer()
                                 
-                                // Right side - pricing when available, invisible text when not
+                                // Right side - pricing when available with pill background, invisible text when not
                                 if let price = getLiteSubscriptionPrice() {
                                     Text("\(price)/week")
-                                        .font(.system(size: 14, weight: .medium))
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 10)
+                                                .fill(Color.white.opacity(0.25))
+                                        )
                                         .padding(.trailing, 8)
                                 } else {
                                     // Invisible text to maintain button height consistency
                                     Text("$0.00/week")
-                                        .font(.system(size: 14, weight: .medium))
+                                        .font(.system(size: 12, weight: .medium))
                                         .opacity(0)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
                                         .padding(.trailing, 8)
                                 }
                             }
@@ -201,7 +256,7 @@ struct RefreshLimitPopupView: View {
                         .fill(Color("shade2"))
                         .overlay(
                             RoundedRectangle(cornerRadius: 20, style: .continuous)
-                                .stroke(Color(.separator).opacity(0.8), lineWidth: 1.5)
+                                .stroke(Color.white.opacity(0.15), lineWidth: 1)
                         )
 
                 )
@@ -294,84 +349,15 @@ struct RefreshLimitPopupView: View {
         let remainingSeconds = Int(seconds) % 60
         return String(format: "%02d:%02d", minutes, remainingSeconds)
     }
-}
-
-// MARK: - Wave Progress Effect
-struct WaveProgressView: View {
-    let progress: CGFloat
-    let totalWidth: CGFloat
-    let height: CGFloat
     
-    @State private var waveOffset: CGFloat = 0
-    @State private var waveTimer: Timer?
-    @State private var waveDirection: CGFloat = 1  // 1 for forward, -1 for reverse
-    
-    var body: some View {
-        let currentWidth = totalWidth * progress
-        
-        Path { path in
-            if currentWidth <= 0 { return }
-            
-            let baseWaveHeight: CGFloat = 2  // Base wave height
-            let waveLength: CGFloat = 20  // Distance between wave peaks
-            
-            // Start from top-left corner
-            path.move(to: CGPoint(x: 0, y: 0))
-            
-            // Top edge - straight line
-            path.addLine(to: CGPoint(x: currentWidth, y: 0))
-            
-            // Right edge with flowing waves - vertical wave motion with individual height variations
-            for y in stride(from: 0, to: height, by: 0.5) {
-                // Create multiple waves with time-based animation
-                let wavePhase = (y / waveLength) * 2 * .pi + waveOffset
-                
-                // Individual height variation for each wave position - time-dependent
-                let heightTimePhase = waveOffset * 0.5  // Slower time progression for height changes
-                let positionPhase = (y / waveLength) * 3.0  // Different phase for each position
-                let combinedHeightPhase = heightTimePhase + positionPhase
-                let individualHeightMultiplier = 0.5 + 0.8 * sin(combinedHeightPhase)  // Range from 0.5 to 1.3
-                let individualWaveHeight = baseWaveHeight * individualHeightMultiplier
-                
-                let wave = sin(wavePhase) * individualWaveHeight
-                let x = currentWidth + wave
-                path.addLine(to: CGPoint(x: x, y: y))
-            }
-            
-            // Bottom edge - straight line back to left
-            path.addLine(to: CGPoint(x: 0, y: height))
-            
-            // Close the path
-            path.closeSubpath()
+    private func getDescriptionText() -> String {
+        if isLimitReached && remainingTime > 0 {
+            // During cooldown - show specific limit reached message
+            return "You've used your \(limit) free refreshes. Subscribe to ChatHub Lite for unlimited access or wait for the timer to reset."
+        } else {
+            // Normal state - show general description
+            return "Refresh the user list to see new online users. Upgrade to ChatHub Lite subscription to unlock unlimited refreshes."
         }
-        .fill(Color.gray.opacity(0.9))
-        .animation(.easeInOut(duration: 0.2), value: progress)
-        .onAppear {
-            startWaveAnimation()
-        }
-        .onDisappear {
-            stopWaveAnimation()
-        }
-    }
-    
-    private func startWaveAnimation() {
-        // Use Timer for directional flow with individual wave height variations
-        waveTimer = Timer.scheduledTimer(withTimeInterval: 0.016, repeats: true) { _ in
-            // Directional wave movement (up/down flow)
-            waveOffset += (0.125 * waveDirection)
-            
-            // Reverse direction at the same points
-            if waveOffset >= .pi {
-                waveDirection = -1  // Reverse direction
-            } else if waveOffset <= -.pi {
-                waveDirection = 1   // Forward direction
-            }
-        }
-    }
-    
-    private func stopWaveAnimation() {
-        waveTimer?.invalidate()
-        waveTimer = nil
     }
 }
 
