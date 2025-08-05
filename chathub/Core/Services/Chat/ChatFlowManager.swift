@@ -297,9 +297,8 @@ class ChatFlowManager {
                 self?.db.collection("UserDevData").document(deviceId).setData(putNotification, merge: true)
             }
             
-            // Increment conversation count
-            ConversationLimitManager.shared.incrementConversationsStarted()
-            AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "setChatId() Incremented conversation count to: \(self?.sessionManager.conversationsStartedCount ?? 0)")
+            // Note: Conversation count is already incremented by ConversationLimitManagerNew.performConversationStart()
+            AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "setChatId() Chat created - conversation count: \(self?.sessionManager.conversationsStartedCount ?? 0)")
             
             AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "setChatId() Chat created successfully - initiator inbox=false, recipient inbox=\(inBox)")
             

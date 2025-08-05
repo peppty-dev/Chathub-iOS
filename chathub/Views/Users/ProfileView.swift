@@ -16,6 +16,13 @@ enum RewardType {
 
 struct ProfileView: View {
     let otherUserId: String
+    
+    // MODERN UX: Accept basic user data from online users list for immediate display
+    let initialUserName: String?
+    let initialGender: String?
+    let initialCountry: String?
+    let initialProfileImage: String?
+    
     @State private var userProfile: UserProfile?
     @State private var userDetails: [String] = []
     @State private var isLoading: Bool = false  // Start with false, only set to true if no local data exists
@@ -40,7 +47,6 @@ struct ProfileView: View {
     
     // Conversation Limit Popup Data (New System)
     @State private var conversationLimitResult: FeatureLimitResult?
-    @State private var messageLimitResult: FeatureLimitResult?
     
     // Chat Pay Data (Legacy - for compatibility)
     @State private var chatPayData: ChatPayData?
@@ -54,6 +60,35 @@ struct ProfileView: View {
     @State private var currentGender: String = ""
     @State private var currentProfilePhoto: String = ""
     @State private var currentCountry: String = ""
+    
+    // MARK: - Initializers
+    
+    // Convenience initializer for backward compatibility
+    init(otherUserId: String) {
+        self.otherUserId = otherUserId
+        self.initialUserName = nil
+        self.initialGender = nil
+        self.initialCountry = nil
+        self.initialProfileImage = nil
+    }
+    
+    // Full initializer with basic user data from online users list
+    init(otherUserId: String, userName: String?, gender: String?, country: String?, profileImage: String?) {
+        self.otherUserId = otherUserId
+        self.initialUserName = userName
+        self.initialGender = gender
+        self.initialCountry = country
+        self.initialProfileImage = profileImage
+    }
+    
+    // Convenience initializer from OnlineUser
+    init(onlineUser: OnlineUser) {
+        self.otherUserId = onlineUser.id
+        self.initialUserName = onlineUser.name
+        self.initialGender = onlineUser.gender
+        self.initialCountry = onlineUser.country
+        self.initialProfileImage = onlineUser.profileImage.isEmpty ? nil : onlineUser.profileImage
+    }
     
     // AI Training Messages
     @State private var aiTrainingMessages: [AITrainingMessage] = []
@@ -69,12 +104,11 @@ struct ProfileView: View {
     // New Popup States (Android Parity - Using specific popups)
     @State private var showVoiceCallPopup = false
     @State private var showVideoCallPopup = false
-    @State private var showMessageLimitPopup = false
 
     var body: some View {
         ZStack {
             mainContent
-            // Conversation Limit popup overlay (New System)
+            // Conversation Limit popup overlay (Always-Show Strategy)
             if showConversationLimitPopup, let result = conversationLimitResult {
                 ConversationLimitPopupView(
                     isPresented: $showConversationLimitPopup,
@@ -82,8 +116,18 @@ struct ProfileView: View {
                     isLimitReached: result.isLimitReached,
                     currentUsage: result.currentUsage,
                     limit: result.limit,
-                    onStartConversation: { handleStartConversation() },
-                    onUpgradeToPremium: { navigateToSubscription() }
+                    onStartConversation: { 
+                        AppLogger.log(tag: "LOG-APP: ProfileView", message: "ConversationLimitPopup onStartConversation callback - resetting popup state")
+                        showConversationLimitPopup = false
+                        conversationLimitResult = nil
+                        handleStartConversation() 
+                    },
+                    onUpgradeToPremium: { 
+                        AppLogger.log(tag: "LOG-APP: ProfileView", message: "ConversationLimitPopup onUpgradeToPremium callback - resetting popup state")
+                        showConversationLimitPopup = false
+                        conversationLimitResult = nil
+                        navigateToSubscription() 
+                    }
                 )
             }
             // Voice Call popup overlay (Android Parity)
@@ -99,25 +143,6 @@ struct ProfileView: View {
                 VideoCallPopupView(
                     isPresented: $showVideoCallPopup,
                     onSubscribe: { navigateToSubscription() }
-                )
-            }
-            
-            // Message Limit popup overlay (New System)
-            if showMessageLimitPopup, let result = messageLimitResult {
-                MessageLimitPopupView(
-                    isPresented: $showMessageLimitPopup,
-                    remainingCooldown: result.remainingCooldown,
-                    isLimitReached: result.isLimitReached,
-                    currentUsage: result.currentUsage,
-                    limit: result.limit,
-                    onSendMessage: {
-                        AppLogger.log(tag: "LOG-APP: ProfileView", message: "User chose to send message from popup.")
-                        handleMessageAction()
-                    },
-                    onUpgradeToPremium: {
-                        AppLogger.log(tag: "LOG-APP: ProfileView", message: "User chose to upgrade from message popup.")
-                        navigateToSubscription()
-                    }
                 )
             }
 
@@ -172,13 +197,21 @@ struct ProfileView: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(false)
         .onAppear {
+            // CRITICAL DEBUG: Log the exact state when view appears
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "🚀 onAppear() TRIGGERED - otherUserId: \(otherUserId), isLoading: \(isLoading), userProfile: \(userProfile?.username ?? "nil")")
+            
             // CRITICAL FIX: Load profile data immediately following the same pattern as other views
             loadProfileDataImmediately()
+        }
+        .onDisappear {
+            // CRITICAL FIX: Reset popup states when view disappears to prevent stale values
+            cleanupPopupStates()
         }
         .task {
             // Background tasks for session data and other operations
             await loadSessionData()
-            await loadUserProfileFromDB() // This will refresh if needed
+            // NOTE: Removed loadUserProfileFromDB() call to prevent duplicate loading and loading animation flicker
+            // The loadProfileDataImmediately() method already handles database loading and background refresh
             await checkBlockStatus()
             await checkExistingChat()
             sendProfileViewNotification()
@@ -297,55 +330,106 @@ struct ProfileView: View {
         }
     }
     
-    // MARK: - Immediate Profile Loading (Following OnlineUsersViewModel Pattern)
+    // MARK: - View Lifecycle Management
+    
+    private func cleanupPopupStates() {
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "cleanupPopupStates() Resetting popup states when view disappears")
+        
+        // Reset conversation limit popup state
+        if showConversationLimitPopup {
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "cleanupPopupStates() Resetting conversation limit popup state")
+            showConversationLimitPopup = false
+            conversationLimitResult = nil
+        }
+        
+        // Reset other popup states to prevent stale values
+        if showVoiceCallPopup {
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "cleanupPopupStates() Resetting voice call popup state")
+            showVoiceCallPopup = false
+        }
+        
+        if showVideoCallPopup {
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "cleanupPopupStates() Resetting video call popup state")
+            showVideoCallPopup = false
+        }
+        
+        // Reset any other modal states
+        if showPhotoViewer {
+            showPhotoViewer = false
+        }
+        
+        if showUserReport {
+            showUserReport = false
+        }
+        
+        if showPermissionDialog {
+            showPermissionDialog = false
+        }
+    }
+    
+    // MARK: - Immediate Profile Loading (Following OnlineUsersViewModel Pattern Exactly)
     private func loadProfileDataImmediately() {
         AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadProfileDataImmediately() STARTING - Loading profile for user: \(otherUserId)")
         
-        // CRITICAL FIX: Check database readiness first
-        guard DatabaseManager.shared.isDatabaseReady() else {
-            AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadProfileDataImmediately() Database not ready - initializing and will retry")
-            
-            // Initialize database if not ready
-            DatabaseManager.shared.initializeDatabase()
-            
-            // Retry after initialization
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                self.loadProfileDataImmediately()
-            }
-            return
-        }
+        // CRITICAL FIX: Follow OnlineUsersViewModel pattern exactly - never show loading for local database queries
+        // Always set isLoading = false first (like OnlineUsersViewModel line 315)
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadProfileDataImmediately() 🔧 Setting isLoading = false (OnlineUsersViewModel pattern)")
+        self.isLoading = false
         
-        // Get ProfileDB instance
+        // Get ProfileDB instance (assume it's always available like OnlineUsersViewModel)
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadProfileDataImmediately() 📊 Checking ProfileDB availability - DatabaseManager.isDatabaseReady(): \(DatabaseManager.shared.isDatabaseReady())")
+        
         guard let profileDB = profileDB else {
-            AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadProfileDataImmediately() ProfileDB not available - will fetch from Firebase")
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadProfileDataImmediately() ProfileDB not available - will fetch from Firebase with loading")
             
-            // Only show loading if no cached data exists
-            if userProfile == nil {
-                isLoading = true
+            // Only show loading when ProfileDB is truly not available (first time setup)
+            self.isLoading = true
+            
+            Task {
+                await fetchProfileFromFirebaseAndSave(shouldUpdateLoadingState: true)
             }
             return
         }
         
-        // CRITICAL FIX: Load from local database SYNCHRONOUSLY on main thread (like OnlineUsersViewModel)
+        // CRITICAL FIX: Local database queries should be INSTANT with no loading state (OnlineUsersViewModel pattern)
         if let localProfile = profileDB.query(UserId: otherUserId) {
             AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadProfileDataImmediately() ✅ Found cached profile for user: \(otherUserId)")
             
             // Convert to UserProfile and show immediately
             let userProfile = convertProfileModelToUserProfile(localProfile)
             
-            // Update UI IMMEDIATELY on main thread (no DispatchQueue.main.async)
+            // Update UI IMMEDIATELY on main thread (no DispatchQueue.main.async) - like OnlineUsersViewModel lines 102-106
             self.userProfile = userProfile
             self.userDetails = createUserDetailsArray(from: userProfile)
-            self.isLoading = false
+            self.isLoading = false // Always ensure loading is off after local database load (OnlineUsersViewModel line 124)
             self.errorMessage = nil
             
             AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadProfileDataImmediately() ✅ Updated UI with cached profile immediately")
+            
+            // Check if cached data is stale and needs background refresh
+            let currentTime = Int(Date().timeIntervalSince1970)
+            let profileAge = currentTime - localProfile.Time
+            let cacheValiditySeconds = 3600 // 1 hour
+            
+            if profileAge >= cacheValiditySeconds {
+                AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadProfileDataImmediately() ⚠️ Cached profile is stale (age: \(profileAge)s >= \(cacheValiditySeconds)s), scheduling background refresh")
+                
+                // Refresh from Firebase in background without showing loading
+                Task {
+                    await fetchProfileFromFirebaseAndSave(shouldUpdateLoadingState: false)
+                }
+            } else {
+                AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadProfileDataImmediately() ✅ Cached profile is fresh (age: \(profileAge)s < \(cacheValiditySeconds)s), no refresh needed")
+            }
         } else {
             AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadProfileDataImmediately() ❌ No cached profile found - will show loading and fetch from Firebase")
             
-            // Only show loading if no cached data exists
-            if userProfile == nil {
-                isLoading = true
+            // Only show loading when we need to fetch from Firebase
+            self.isLoading = true
+            
+            // Fetch from Firebase since no cached data exists
+            Task {
+                await fetchProfileFromFirebaseAndSave(shouldUpdateLoadingState: true)
             }
         }
     }
@@ -353,19 +437,7 @@ struct ProfileView: View {
     @ViewBuilder
     private var mainContent: some View {
         VStack(spacing: 0) {
-            if isLoading && userProfile == nil {
-                // Only show loading when there's no existing profile data - prevents flicker
-                VStack(spacing: 24) {
-                    ProgressView()
-                        .scaleEffect(1.2)
-                    
-                    Text("Loading profile...")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(Color("shade6"))
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.top, 60)
-            } else if let error = errorMessage {
+            if let error = errorMessage {
                 VStack(spacing: 20) {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .font(.system(size: 48))
@@ -383,27 +455,166 @@ struct ProfileView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .padding(.top, 60)
-            } else if let profile = userProfile {
-                profileScrollView(for: profile)
             } else {
-                // Handle edge case: no profile data and no loading/error state
-                VStack(spacing: 20) {
-                    Image(systemName: "person.circle")
-                        .font(.system(size: 48))
-                        .foregroundColor(Color("shade6"))
+                // MODERN UX: Always show skeleton UI structure immediately, then populate with data
+                if let profile = userProfile {
+                    // CRITICAL DEBUG: Log when profile UI is displayed
+                    let _ = AppLogger.log(tag: "LOG-APP: ProfileView", message: "👤 SHOWING PROFILE UI - user: \(profile.username), isLoading: \(isLoading)")
                     
-                    Text("Profile not available")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(Color("dark"))
+                    profileScrollView(for: profile)
+                } else {
+                    // SKELETON UI: Show structure immediately while loading data
+                    let _ = AppLogger.log(tag: "LOG-APP: ProfileView", message: "🎨 SHOWING SKELETON UI - isLoading: \(isLoading), userProfile: nil")
                     
-                    Text("This profile could not be loaded")
-                        .font(.system(size: 14))
-                        .foregroundColor(Color("shade6"))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 32)
+                    skeletonProfileView()
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(.top, 60)
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func skeletonProfileView() -> some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            LazyVStack(spacing: 0) {
+                skeletonProfileImageSection()
+                
+                // Enhanced spacing before MREC ad
+                Spacer()
+                    .frame(height: 40)
+                
+                // Bottom padding for better scroll experience
+                Spacer()
+                    .frame(height: 80)
+            }
+            .padding(.top, 24) // Better top spacing
+        }
+    }
+    
+    @ViewBuilder
+    private func skeletonProfileImageSection() -> some View {
+        VStack(spacing: 0) {
+            // Profile Image - exact same size and styling as real profile image
+            VStack(spacing: 12) {
+                skeletonProfileImage()
+                
+                // Show username immediately if available from online users list (ONLY username, no other details)
+                VStack(spacing: 8) {
+                    if let userName = initialUserName {
+                        Text(Profanity.share.removeProfanityNumbersAllowed(userName))
+                            .font(.system(size: 26, weight: .bold))
+                            .foregroundColor(Color("dark"))
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                    } else {
+                        Spacer()
+                            .frame(height: 26) // Reserve space for username
+                    }
+                    
+                    // Reserve space for online status (will be populated from full profile)
+                    // Online status: ~14px font + 12px padding + 8px spacing = ~34px total
+                    Spacer()
+                        .frame(height: 34)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 12)
+            
+            // Spacing before action buttons (reserve space for potential subscription header)
+            // Real profile can have either:
+            // - Subscription header: 24px spacing + 24px padding + 17px text = 65px total
+            // - No subscription: 32px spacing
+            // Reserve the larger space to prevent layout shifts
+            Spacer()
+                .frame(height: 65)
+            
+            // Action Buttons - ALWAYS SHOW THESE (they're functional even during loading)
+            VStack(spacing: 0) {
+                enhancedActionButtonsSection
+            }
+            
+            // Reserve space for profile details section (will be populated when full data loads)
+            VStack(spacing: 0) {
+                Spacer()
+                    .frame(height: 24)
+                
+                // Don't show any details from online users list - wait for full profile data
+                Spacer()
+                    .frame(height: 120) // Reserve space for details section
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func skeletonProfileImage() -> some View {
+        ZStack {
+            // Shadow layer (matches profileImageShadow)
+            Circle()
+                .fill(Color.black.opacity(0.08))
+                .frame(width: 160, height: 160)
+                .offset(y: 2)
+                .blur(radius: 4)
+            
+            // Show actual profile image if available from online users list (for immediate display)
+            if let imageUrl = initialProfileImage, !imageUrl.isEmpty && imageUrl != "null",
+               let url = URL(string: imageUrl) {
+                AsyncImage(url: url) { phase in
+                    switch phase {
+                    case .empty:
+                        skeletonProfilePlaceholder()
+                    case .success(let image):
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 160, height: 160)
+                            .clipShape(Circle())
+                            .overlay(profileImageBorder)
+                            .overlay(profileImageInnerHighlight)
+                    case .failure(_):
+                        skeletonProfilePlaceholder()
+                    @unknown default:
+                        skeletonProfilePlaceholder()
+                    }
+                }
+            } else {
+                skeletonProfilePlaceholder()
+            }
+        }
+    }
+    
+    @ViewBuilder
+    private func skeletonProfilePlaceholder() -> some View {
+        // Use gender-based default image if available, otherwise generic placeholder
+        ZStack {
+            Circle()
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color("shade3"),
+                            Color("shade4")
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: 160, height: 160)
+                .clipShape(Circle())
+                .overlay(profileImageBorder)
+                .overlay(profileImageInnerHighlight)
+            
+            // Use gender-specific icon if gender is available from online users list (male/female icons)
+            if let gender = initialGender {
+                Image(gender.lowercased() == "male" ? "male" : "female")
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .opacity(0.8)
+                    .frame(width: 160, height: 160)
+                    .clipShape(Circle())
+            } else {
+                // Default person icon
+                Image(systemName: "person.circle.fill")
+                    .font(.system(size: 60))
+                    .foregroundColor(Color("shade5"))
+                    .opacity(0.3)
             }
         }
     }
@@ -723,6 +934,10 @@ struct ProfileView: View {
                 .aspectRatio(contentMode: .fill)
                 .opacity(0.8)
         }
+        .frame(width: 160, height: 160)
+        .clipShape(Circle())
+        .overlay(profileImageBorder)
+        .overlay(profileImageInnerHighlight)
     }
     
     private var profileImageBorder: some View {
@@ -906,93 +1121,10 @@ struct ProfileView: View {
     }
 
     // MARK: - Local Database Profile Loading (Android Parity)
+
     
-    private func loadUserProfileFromDB() async {
-        AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadUserProfileFromDB() starting for user: \(otherUserId)")
-        
-        // Wait for database to be ready (with timeout)
-        var attempts = 0
-        let maxAttempts = 10 // 1 second total wait time
-        while !DatabaseManager.shared.isDatabaseReady() && attempts < maxAttempts {
-            AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadUserProfileFromDB() database not ready, waiting... attempt \(attempts + 1)/\(maxAttempts)")
-            try? await Task.sleep(nanoseconds: 100_000_000) // 0.1 seconds
-            attempts += 1
-        }
-        
-        // Check local database first
-        guard let profileDB = profileDB else {
-            AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadUserProfileFromDB() ❌ ProfileDB not initialized after waiting, fetching from Firebase")
-            // Only show loading when we need to fetch from Firebase AND there's no existing profile data
-            await MainActor.run {
-                if self.userProfile == nil {
-                    self.isLoading = true
-                }
-            }
-            await fetchProfileFromFirebaseAndSave()
-            return
-        }
-        
-        AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadUserProfileFromDB() ✅ ProfileDB initialized, querying for user: \(otherUserId)")
-        
-        if let localProfile = profileDB.query(UserId: otherUserId) {
-            AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadUserProfileFromDB() ✅ Found cached profile for user: \(otherUserId), Name: \(localProfile.Name), Age: \(localProfile.Age)")
-            
-            // Check if profile is still fresh (1 hour = 3600 seconds)
-            let currentTime = Int(Date().timeIntervalSince1970)
-            let profileAge = currentTime - localProfile.Time
-            let cacheValiditySeconds = 3600 // 1 hour
-            
-            AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadUserProfileFromDB() Cache check - Profile age: \(profileAge)s, Cache validity: \(cacheValiditySeconds)s")
-            
-            if profileAge < cacheValiditySeconds {
-                AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadUserProfileFromDB() ✅ Using fresh cached profile (age: \(profileAge)s < \(cacheValiditySeconds)s)")
-                
-                // Use cached profile - convert ProfileModel to UserProfile
-                let userProfile = convertProfileModelToUserProfile(localProfile)
-                
-                await MainActor.run {
-                    self.userProfile = userProfile
-                    let newDetails = self.createUserDetailsArray(from: userProfile)
-                    AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadUserProfileFromDB() ✅ Updated UI with cached profile, details count: \(newDetails.count)")
-                    self.userDetails = newDetails
-                    self.isLoading = false
-                    self.errorMessage = nil
-                }
-                return
-            } else {
-                AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadUserProfileFromDB() ⚠️ Cached profile is stale (age: \(profileAge)s >= \(cacheValiditySeconds)s), refreshing from Firebase")
-                
-                // Show cached profile immediately, then refresh in background
-                let userProfile = convertProfileModelToUserProfile(localProfile)
-                
-                await MainActor.run {
-                    self.userProfile = userProfile
-                    let newDetails = self.createUserDetailsArray(from: userProfile)
-                    AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadUserProfileFromDB() ✅ Showing stale cached profile while refreshing")
-                    self.userDetails = newDetails
-                    self.isLoading = false
-                    self.errorMessage = nil
-                }
-                
-                // Refresh from Firebase in background
-                await fetchProfileFromFirebaseAndSave()
-                return
-            }
-        } else {
-            AppLogger.log(tag: "LOG-APP: ProfileView", message: "loadUserProfileFromDB() ❌ No cached profile found for user: \(otherUserId), fetching from Firebase")
-            
-            // Only show loading when we need to fetch from Firebase AND there's no existing profile data
-            await MainActor.run {
-                if self.userProfile == nil {
-                    self.isLoading = true
-                }
-            }
-            await fetchProfileFromFirebaseAndSave()
-        }
-    }
-    
-    private func fetchProfileFromFirebaseAndSave() async {
-        AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchProfileFromFirebaseAndSave() fetching profile from Firebase for: \(otherUserId)")
+    private func fetchProfileFromFirebaseAndSave(shouldUpdateLoadingState: Bool = true) async {
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchProfileFromFirebaseAndSave() fetching profile from Firebase for: \(otherUserId), shouldUpdateLoadingState: \(shouldUpdateLoadingState)")
         
         do {
             let db = Firestore.firestore()
@@ -1001,10 +1133,12 @@ struct ProfileView: View {
             let userDocument = try await db.collection("Users").document(otherUserId).getDocument()
             
             guard userDocument.exists, let userData = userDocument.data() else {
-                await MainActor.run {
-                    self.errorMessage = "User not found"
+                            await MainActor.run {
+                self.errorMessage = "User not found"
+                if shouldUpdateLoadingState {
                     self.isLoading = false
                 }
+            }
                 return
             }
             
@@ -1059,15 +1193,22 @@ struct ProfileView: View {
                 let newDetails = self.createUserDetailsArray(from: profile)
                 AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchProfileFromFirebaseAndSave() updating userDetails from \(self.userDetails.count) to \(newDetails.count) items")
                 self.userDetails = newDetails
-                self.isLoading = false
-                AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchProfileFromFirebaseAndSave() UI updated successfully")
+                
+                // Only update loading state if this is not a background refresh
+                if shouldUpdateLoadingState {
+                    self.isLoading = false
+                }
+                
+                AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchProfileFromFirebaseAndSave() UI updated successfully, isLoading: \(self.isLoading)")
             }
             
         } catch {
             AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchProfileFromFirebaseAndSave() error: \(error.localizedDescription)")
             await MainActor.run {
                 self.errorMessage = "Failed to load profile: \(error.localizedDescription)"
-                self.isLoading = false
+                if shouldUpdateLoadingState {
+                    self.isLoading = false
+                }
             }
         }
     }
@@ -1098,15 +1239,15 @@ struct ProfileView: View {
         let country = NSString(string: profile.country)
         let language = NSString(string: profile.language)
         let gender = NSString(string: profile.gender)
-        let city = NSString(string: data["city"] as? String ?? "")
+        let city = NSString(string: profile.city ?? "")
         let height = NSString(string: data["height"] as? String ?? "")
         let occupation = NSString(string: data["occupation"] as? String ?? "")
         let hobbies = NSString(string: data["hobbies"] as? String ?? "")
         let zodiac = NSString(string: data["zodiac"] as? String ?? "")
         let snap = NSString(string: data["snap"] as? String ?? "")
         let instagram = NSString(string: data["insta"] as? String ?? "")
-        let emailVerified = NSString(string: data["email_verified"] as? String ?? "")
-        let createdTime = NSString(string: data["User_registered_time"] as? String ?? "")
+        let emailVerified = NSString(string: profile.emailVerified ?? "")
+        let createdTime = NSString(string: profile.userRegisteredTime ?? "")
         let platform = NSString(string: data["platform"] as? String ?? "")
         let subscriptionTier = NSString(string: data["subscriptionTier"] as? String ?? "none")
         
@@ -1139,17 +1280,17 @@ struct ProfileView: View {
         let videoAllowed = NSString(string: data["video_allowed"] as? String ?? "")
         let picsAllowed = NSString(string: data["pics_allowed"] as? String ?? "")
         
-        // Statistics - using exact Android field names
-        let voiceCalls = NSString(string: data["voice_calls"] as? String ?? "")
-        let videoCalls = NSString(string: data["video_calls"] as? String ?? "")
-        let goodExperience = NSString(string: data["good_experience"] as? String ?? "")
-        let badExperience = NSString(string: data["bad_experience"] as? String ?? "")
-        let maleAccounts = NSString(string: data["male_accounts"] as? String ?? "")
-        let femaleAccounts = NSString(string: data["female_accounts"] as? String ?? "")
-        let maleChats = NSString(string: data["male_chats"] as? String ?? "")
-        let femaleChats = NSString(string: data["female_chats"] as? String ?? "")
-        let reports = NSString(string: data["reports"] as? String ?? "")
-        let blocks = NSString(string: data["blocks"] as? String ?? "")
+        // Statistics - using data from UserProfile object (already processed from Firebase)
+        let voiceCalls = NSString(string: profile.voiceCalls ?? "")
+        let videoCalls = NSString(string: profile.videoCalls ?? "")
+        let goodExperience = NSString(string: profile.goodExperience ?? "")
+        let badExperience = NSString(string: profile.badExperience ?? "")
+        let maleAccounts = NSString(string: profile.maleAccounts ?? "")
+        let femaleAccounts = NSString(string: profile.femaleAccounts ?? "")
+        let maleChats = NSString(string: profile.maleChats ?? "")
+        let femaleChats = NSString(string: profile.femaleChats ?? "")
+        let reports = NSString(string: profile.reports ?? "")
+        let blocks = NSString(string: profile.blocks ?? "")
         
         let image = NSString(string: profile.profileImage)
         let name = NSString(string: profile.name)
@@ -1158,14 +1299,9 @@ struct ProfileView: View {
         // Use continuation to wait for database operations to complete
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                AppLogger.log(tag: "LOG-APP: ProfileView", message: "saveProfileToLocalDatabase() 🗑️ Deleting existing profile for user: \(profile.id)")
+                AppLogger.log(tag: "LOG-APP: ProfileView", message: "saveProfileToLocalDatabase() 💾 Upserting profile for user: \(profile.id) (INSERT OR REPLACE)")
                 
-                // Delete existing profile first (synchronous)
-                profileDB.delete(UserId: profile.id)
-                
-                AppLogger.log(tag: "LOG-APP: ProfileView", message: "saveProfileToLocalDatabase() 💾 Inserting new profile for user: \(profile.id)")
-                
-                // Insert new profile data (synchronous)
+                // Insert or replace profile data (synchronous) - no need to delete first
                 profileDB.insert(
                     UserId: userId,
                     Age: age,
@@ -1225,7 +1361,7 @@ struct ProfileView: View {
                     city: city
                 )
                 
-                AppLogger.log(tag: "LOG-APP: ProfileView", message: "saveProfileToLocalDatabase() ✅ Database operations completed for user: \(profile.id)")
+                AppLogger.log(tag: "LOG-APP: ProfileView", message: "saveProfileToLocalDatabase() ✅ Profile upsert completed for user: \(profile.id)")
                 
                 // Verify the profile was saved correctly
                 if let savedProfile = profileDB.query(UserId: profile.id) {
@@ -1537,6 +1673,8 @@ struct ProfileView: View {
     }
     
     private func convertProfileModelToUserProfile(_ profileModel: ProfileModel) -> UserProfile {
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "convertProfileModelToUserProfile() Converting cached profile - EmailVerified: '\(profileModel.EmailVerified)', CreatedTime: '\(profileModel.CreatedTime)'")
+        
         let subscriptionTier = profileModel.Premium.isEmpty ? "none" : profileModel.Premium
         let subscriptionExpiry = Int64(profileModel.Time) + 86400 // Default 1 day from last update
         
@@ -1887,7 +2025,7 @@ struct ProfileView: View {
         // Haptic feedback on chat tap
         triggerHapticFeedback()
         AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleChatButtonTap()")
-        handleUnifiedMonetization()
+        handleConversationStart()
     }
     
     // Add haptic feedback helper for ProfileView
@@ -1896,68 +2034,83 @@ struct ProfileView: View {
         impact.impactOccurred()
     }
     
-    // MARK: - Unified Monetization (Android Parity)
-    private func handleUnifiedMonetization() {
-        AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleUnifiedMonetization() Starting unified monetization check")
+    // MARK: - Conversation Start Logic (Always-Show Popup Strategy)
+    private func handleConversationStart() {
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleConversationStart() Starting conversation initiation")
         
         guard userProfile != nil else {
-            AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleUnifiedMonetization() No user profile available")
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleConversationStart() No user profile available")
             return
         }
         
         // Check if this is an existing conversation
         if !chatId.isEmpty && chatId != "null" {
-            AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleUnifiedMonetization() Existing conversation detected")
-            
-            // Check if user has Premium Plus or Pro subscription (Android Parity)
-            if PremiumAccessHelper.hasPlusOrProAccess {
-                AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleUnifiedMonetization() Premium Plus/Pro user - proceeding directly to existing chat")
-                navigateToMessageView(chatId: chatId, otherUserId: otherUserId)
-                return
-            }
-            
-            // Non-premium and Lite users need to check message limits
-            AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleUnifiedMonetization() Non-premium or Lite user - checking message limits")
-            
-            let result = MessageLimitManager.shared.checkMessageLimit()
-            
-            if result.canProceed {
-                AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleUnifiedMonetization() MessageLimitManager: Can proceed to existing chat")
-                navigateToMessageView(chatId: chatId, otherUserId: otherUserId)
-            } else {
-                AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleUnifiedMonetization() MessageLimitManager: Show dialog for existing chat")
-                messageLimitResult = result
-                showMessageLimitPopup = true
-            }
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleConversationStart() Existing conversation detected - navigating directly")
+            // For existing conversations, navigate directly without any limit checks
+            navigateToMessageView(chatId: chatId, otherUserId: otherUserId)
             return
         }
         
-        // For new conversations - Check conversation limits using new system
-        AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleUnifiedMonetization() Checking conversation limits with new system")
+        // For new conversations - Check conversation limits using always-show popup strategy
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleConversationStart() New conversation - checking limits")
         
         let result = ConversationLimitManagerNew.shared.checkConversationLimit()
         
-        if result.canProceed {
-            AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleUnifiedMonetization() Can proceed - starting conversation")
-            startConversation()
-        } else {
-            AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleUnifiedMonetization() Showing conversation limit popup")
+        // Track conversation button tap
+        ConversationAnalytics.shared.trackConversationButtonTapped(
+            userType: ConversationAnalytics.shared.getUserType(),
+            currentUsage: result.currentUsage,
+            limit: result.limit,
+            isLimitReached: result.isLimitReached
+        )
+        
+        if result.showPopup {
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleConversationStart() Showing conversation limit popup")
             conversationLimitResult = result
             showConversationLimitPopup = true
+        } else {
+            // Plus subscribers and new users proceed directly without popup
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleConversationStart() Plus/New user - proceeding directly with algorithm")
+            
+            // Track bypass analytics
+            if SubscriptionSessionManager.shared.isUserSubscribedToPlus() {
+                ConversationAnalytics.shared.trackPlusSubscriberBypass()
+            } else if ConversationLimitManagerNew.shared.isNewUser() {
+                // Calculate remaining new user time
+                let userSessionManager = UserSessionManager.shared
+                let firstAccountTime = userSessionManager.firstAccountCreatedTime
+                let newUserPeriod = TimeInterval(SessionManager.shared.newUserFreePeriodSeconds)
+                let remainingTime = max(0, newUserPeriod - (Date().timeIntervalSince1970 - firstAccountTime))
+                ConversationAnalytics.shared.trackNewUserBypass(newUserTimeRemaining: remainingTime)
+            }
+            
+            startAlgorithm()
         }
     }
     
-    // MARK: - New Conversation Flow (New System)
+    // MARK: - New Conversation Flow (Always-Show Popup Strategy)
     private func startConversation() {
-        AppLogger.log(tag: "LOG-APP: ProfileView", message: "startConversation() Starting new conversation")
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "startConversation() Starting new conversation with algorithm")
         
         guard let profile = userProfile else { return }
         
-        // Increment conversation count and proceed
+        // Track conversation performed analytics
+        let result = ConversationLimitManagerNew.shared.checkConversationLimit()
+        let isFirstConversationOfSession = result.currentUsage == 0
+        
+        ConversationAnalytics.shared.trackConversationPerformed(
+            userType: ConversationAnalytics.shared.getUserType(),
+            currentUsage: result.currentUsage + 1, // +1 because we're about to increment
+            limit: result.limit,
+            isFirstConversationOfSession: isFirstConversationOfSession
+        )
+        
+        // Increment conversation count and proceed with algorithm
         ConversationLimitManagerNew.shared.performConversationStart { success in
             if success {
                 DispatchQueue.main.async {
-                    self.proceedToChat(profile: profile)
+                    // Use algorithm to determine inbox/outbox routing
+                    self.startAlgorithm()
                 }
             } else {
                 AppLogger.log(tag: "LOG-APP: ProfileView", message: "startConversation() Failed to start conversation")
@@ -2422,19 +2575,6 @@ struct ProfileView: View {
     }
     
     // MARK: - Dialog Methods (Android Parity)
-    
-    private func showMessageLimitDialog() {
-        AppLogger.log(tag: "LOG-APP: ProfileView", message: "showMessageLimitDialog() Showing message limit dialog")
-        // Show the new dedicated MessageLimitPopupView (Android Parity)
-        showMessageLimitPopup = true
-    }
-    
-    private func showConversationLimitDialog() {
-        AppLogger.log(tag: "LOG-APP: ProfileView", message: "showConversationLimitDialog() Showing conversation limit dialog")
-        
-        // Show the conversation limit popup (matching Android dialog_conversation_limit.xml)
-        showConversationLimitPopup = true
-    }
     
     private func showWatchAdDialog(coins: Int, freeMessage: Bool) {
         AppLogger.log(tag: "LOG-APP: ProfileView", message: "showWatchAdDialog() Showing watch ad dialog: coins=\(coins), freeMessage=\(freeMessage)")

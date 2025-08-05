@@ -26,10 +26,7 @@ class MessagingSettingsSessionManager: ObservableObject {
         static let newUserFreePeriodSeconds = "new_user_free_period_ms"
         static let freeMessagesLimit = "free_user_message_limit"
         static let freeMessagesCooldownSeconds = "free_user_message_cooldown_minutes"
-        static let freeConversationsLimit = "free_user_conversation_limit"
-        static let freeConversationsCooldownSeconds = "free_user_conversation_cooldown_minutes"
-        static let conversationsStartedCount = "conversations_started_count"
-        static let conversationLimitCooldownStartTime = "conversation_limit_cooldown_start_time"
+
         
 
         
@@ -79,25 +76,7 @@ class MessagingSettingsSessionManager: ObservableObject {
         set { defaults.set(newValue, forKey: Keys.freeMessagesCooldownSeconds) }
     }
     
-    var freeConversationsLimit: Int {
-        get { defaults.integer(forKey: Keys.freeConversationsLimit) }
-        set { defaults.set(newValue, forKey: Keys.freeConversationsLimit) }
-    }
-    
-    var freeConversationsCooldownSeconds: TimeInterval {
-        get { defaults.double(forKey: Keys.freeConversationsCooldownSeconds) }
-        set { defaults.set(newValue, forKey: Keys.freeConversationsCooldownSeconds) }
-    }
-    
-    var conversationsStartedCount: Int {
-        get { defaults.integer(forKey: Keys.conversationsStartedCount) }
-        set { defaults.set(newValue, forKey: Keys.conversationsStartedCount) }
-    }
-    
-    var conversationLimitCooldownStartTime: Int64 {
-        get { defaults.object(forKey: Keys.conversationLimitCooldownStartTime) as? Int64 ?? 0 }
-        set { defaults.set(newValue, forKey: Keys.conversationLimitCooldownStartTime) }
-    }
+
     
 
 
@@ -290,30 +269,7 @@ class MessagingSettingsSessionManager: ObservableObject {
         return totalNoOfMessageSent < freeMessagesLimit
     }
     
-    /// Check if user can start new conversation
-    func canStartConversation() -> Bool {
-        // Premium users can always start conversations
-        if hasActiveSubscription() {
-            return true
-        }
-        
-        // Check if user is in free period
-        if isInFreePeriod() {
-            return true
-        }
-        
-        // Check conversation limit and cooldown for free users
-        let currentTime = Int64(Date().timeIntervalSince1970 * 1000) // Convert to milliseconds
-        let cooldownEnd = conversationLimitCooldownStartTime + Int64(freeConversationsCooldownSeconds * 1000)
-        
-        if currentTime > cooldownEnd {
-            // Cooldown period has passed, reset conversation count
-            resetConversationLimits()
-            return true
-        }
-        
-        return conversationsStartedCount < freeConversationsLimit
-    }
+
     
     /// Increment message count
     func incrementMessageCount() {
@@ -325,15 +281,7 @@ class MessagingSettingsSessionManager: ObservableObject {
         synchronize()
     }
     
-    /// Increment conversation count
-    func incrementConversationCount() {
-        conversationsStartedCount += 1
-        if conversationLimitCooldownStartTime == 0 {
-            conversationLimitCooldownStartTime = Int64(Date().timeIntervalSince1970 * 1000)
-        }
-        AppLogger.log(tag: "LOG-APP: MessagingSettingsSessionManager", message: "incrementConversationCount() - Conversations started: \(conversationsStartedCount)")
-        synchronize()
-    }
+
     
     /// Reset message limits (called when cooldown expires)
     func resetMessageLimits() {
@@ -343,13 +291,7 @@ class MessagingSettingsSessionManager: ObservableObject {
         synchronize()
     }
     
-    /// Reset conversation limits (called when cooldown expires)
-    func resetConversationLimits() {
-        conversationsStartedCount = 0
-        conversationLimitCooldownStartTime = 0
-        AppLogger.log(tag: "LOG-APP: MessagingSettingsSessionManager", message: "resetConversationLimits() - Conversation limits reset")
-        synchronize()
-    }
+
     
     /// Get remaining messages in current period
     func getRemainingMessages() -> Int {
@@ -360,14 +302,7 @@ class MessagingSettingsSessionManager: ObservableObject {
         return max(0, freeMessagesLimit - totalNoOfMessageSent)
     }
     
-    /// Get remaining conversations in current period
-    func getRemainingConversations() -> Int {
-        if hasActiveSubscription() || isInFreePeriod() {
-            return Int.max // Unlimited
-        }
-        
-        return max(0, freeConversationsLimit - conversationsStartedCount)
-    }
+
     
     /// Get time remaining until message cooldown expires
     func getMessageCooldownTimeRemaining() -> TimeInterval {
@@ -380,16 +315,7 @@ class MessagingSettingsSessionManager: ObservableObject {
         return max(0, cooldownEnd - currentTime)
     }
     
-    /// Get time remaining until conversation cooldown expires
-    func getConversationCooldownTimeRemaining() -> TimeInterval {
-        if hasActiveSubscription() || isInFreePeriod() {
-            return 0
-        }
-        
-        let currentTime = Date().timeIntervalSince1970 * 1000 // Convert to milliseconds
-        let cooldownEnd = conversationLimitCooldownStartTime + Int64(freeConversationsCooldownSeconds * 1000)
-        return max(0, TimeInterval(cooldownEnd - Int64(currentTime)) / 1000)
-    }
+
     
     /// Store last message for user
     func setLastUserMessage(_ message: String, for userId: String) {
@@ -438,7 +364,6 @@ class MessagingSettingsSessionManager: ObservableObject {
         // Reset limits if subscription is active
         if isActive {
             resetMessageLimits()
-            resetConversationLimits()
         }
         
         synchronize()
@@ -492,9 +417,7 @@ class MessagingSettingsSessionManager: ObservableObject {
         totalNoOfMessageReceived = 0
         totalNoOfMessageSent = 0
         
-        // Clear conversation tracking
-        conversationsStartedCount = 0
-        conversationLimitCooldownStartTime = 0
+        // Clear conversation tracking (now handled by SessionManager)
         
         // Clear subscription status
         isSubscriptionActive = false

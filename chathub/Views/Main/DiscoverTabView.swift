@@ -242,6 +242,13 @@ struct DiscoverTabView: View {
     
     private func cleanupView() {
         AppLogger.log(tag: "LOG-APP: DiscoverView", message: "cleanupView() Cleaning up discover view")
+        
+        // Reset search limit popup state to prevent stale values
+        if showSearchLimitPopup {
+            AppLogger.log(tag: "LOG-APP: DiscoverView", message: "cleanupView() Resetting search limit popup state")
+            showSearchLimitPopup = false
+            searchLimitResult = nil
+        }
     }
     
     private func handleSearch() {

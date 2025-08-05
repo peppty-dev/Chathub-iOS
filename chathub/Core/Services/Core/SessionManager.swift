@@ -794,8 +794,8 @@ class SessionManager: ObservableObject {
     var freeConversationsLimit: Int {
         get { 
             let value = defaults.integer(forKey: Keys.freeConversationsLimit)
-            // Provide reasonable default if not set from remote config (Android parity)
-            return value > 0 ? value : 2
+            // Default to 5 free conversations
+            return value > 0 ? value : 5
         }
         set { defaults.set(newValue, forKey: Keys.freeConversationsLimit) }
     }
@@ -803,8 +803,8 @@ class SessionManager: ObservableObject {
     var freeConversationsCooldownSeconds: Int {
         get { 
             let value = defaults.integer(forKey: Keys.freeConversationsCooldownSeconds)
-            // Provide reasonable default if not set from remote config (Android parity)
-            return value > 0 ? value : 30
+            // Default to 5 minutes (300 seconds)
+            return value > 0 ? value : 300
         }
         set { defaults.set(newValue, forKey: Keys.freeConversationsCooldownSeconds) }
     }

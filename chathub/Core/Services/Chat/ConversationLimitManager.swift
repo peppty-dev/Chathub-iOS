@@ -20,9 +20,9 @@ protocol ConversationLimitCallback {
 class ConversationLimitManager: ObservableObject {
     static let shared = ConversationLimitManager()
     
-    // Use specialized session managers instead of monolithic SessionManager
+    // Use SessionManager for conversation limits (unified approach)
     private let userSessionManager = UserSessionManager.shared
-    private let messagingSettingsSessionManager = MessagingSettingsSessionManager.shared
+    private let sessionManager = SessionManager.shared
     private let subscriptionSessionManager = SubscriptionSessionManager.shared
     private var currentDialog: ConversationLimitDialogView? = nil
     private var countdownTimer: Timer? = nil
@@ -44,20 +44,20 @@ class ConversationLimitManager: ObservableObject {
             
             AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "checkConversationLimitAndProceed() Subscription Status - Lite: \(isLite), Plus: \(isPlus), Pro: \(isPro), NewUser: \(isNewUser), Active: \(isActive), Tier: \(tier)")
             
-            // Check subscription status first (Android parity) - bypass for subscribed users
-            if isLite || isPlus || isPro || isNewUser {
-                AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "checkConversationLimitAndProceed() User is subscribed or new user - bypassing conversation limit")
+            // Check subscription status first - bypass for Plus subscribers and new users only
+            if isPlus || isNewUser {
+                AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "checkConversationLimitAndProceed() User is Plus subscriber or new user - bypassing conversation limit")
                 callback.onCanProceed()
                 return
             }
             
             // Check if we're within the conversation limit
-            let conversationsStarted = messagingSettingsSessionManager.conversationsStartedCount
-            let conversationLimit = messagingSettingsSessionManager.freeConversationsLimit
+            let conversationsStarted = sessionManager.conversationsStartedCount
+            let conversationLimit = sessionManager.freeConversationsLimit
             let limitReached = conversationsStarted >= conversationLimit
             
             AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "checkConversationLimitAndProceed() Conversation Count Check - Current: \(conversationsStarted), Limit: \(conversationLimit), Limit Reached: \(limitReached)")
-            AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "checkConversationLimitAndProceed() Cooldown Duration: \(messagingSettingsSessionManager.freeConversationsCooldownSeconds) seconds")
+            AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "checkConversationLimitAndProceed() Cooldown Duration: \(sessionManager.freeConversationsCooldownSeconds) seconds")
             
             if !limitReached {
                 AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "checkConversationLimitAndProceed() Under conversation limit - proceeding")
@@ -66,9 +66,9 @@ class ConversationLimitManager: ObservableObject {
             }
             
             // Limit is reached, check cooldown status
-            let cooldownStartTimeMillis = messagingSettingsSessionManager.conversationLimitCooldownStartTime
+            let cooldownStartTimeMillis = sessionManager.conversationLimitCooldownStartTime
             let currentTimeSeconds = Int64(Date().timeIntervalSince1970)
-            let cooldownDurationSeconds = messagingSettingsSessionManager.freeConversationsCooldownSeconds
+            let cooldownDurationSeconds = sessionManager.freeConversationsCooldownSeconds
             let cooldownStartTimeSeconds = cooldownStartTimeMillis / 1000
             
             AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "checkConversationLimitAndProceed() Cooldown State - Start Time (s): \(cooldownStartTimeSeconds), Current Time (s): \(currentTimeSeconds), Duration (s): \(cooldownDurationSeconds), Has Active Cooldown: \(cooldownStartTimeMillis > 0)")
@@ -87,7 +87,7 @@ class ConversationLimitManager: ObservableObject {
                 } else {
                     AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "checkConversationLimitAndProceed() Cooldown finished but wasn't reset? Resetting now.")
                     resetConversationsStartedCount()
-                    messagingSettingsSessionManager.conversationLimitCooldownStartTime = 0
+                    sessionManager.conversationLimitCooldownStartTime = 0
                     callback.onCanProceed()
                 }
             } else {
@@ -108,9 +108,9 @@ class ConversationLimitManager: ObservableObject {
         }
         
         // Get cooldown state in seconds
-        let cooldownStartTimeMillis = messagingSettingsSessionManager.conversationLimitCooldownStartTime
+        let cooldownStartTimeMillis = sessionManager.conversationLimitCooldownStartTime
         let currentTimeSeconds = Int64(Date().timeIntervalSince1970)
-        let cooldownDurationSeconds = messagingSettingsSessionManager.freeConversationsCooldownSeconds
+        let cooldownDurationSeconds = sessionManager.freeConversationsCooldownSeconds
         let remainingTimeSeconds: Int64
         let cooldownStartTimeSeconds = cooldownStartTimeMillis / 1000
         
@@ -147,7 +147,7 @@ class ConversationLimitManager: ObservableObject {
             guard let self = self else { return }
             
             let currentTime = Int64(Date().timeIntervalSince1970)
-            let cooldownStartTime = self.messagingSettingsSessionManager.conversationLimitCooldownStartTime / 1000
+            let cooldownStartTime = self.sessionManager.conversationLimitCooldownStartTime / 1000
             let elapsedTime = currentTime - cooldownStartTime
             let remaining = max(0, totalDurationSeconds - elapsedTime)
             
@@ -162,7 +162,7 @@ class ConversationLimitManager: ObservableObject {
             guard let self = self else { return }
             
             let currentTime = Int64(Date().timeIntervalSince1970)
-            let cooldownStartTime = self.messagingSettingsSessionManager.conversationLimitCooldownStartTime / 1000
+            let cooldownStartTime = self.sessionManager.conversationLimitCooldownStartTime / 1000
             let elapsedTime = currentTime - cooldownStartTime
             let remaining = max(0, totalDurationSeconds - elapsedTime)
             
@@ -182,7 +182,7 @@ class ConversationLimitManager: ObservableObject {
         resetConversationsStartedCount()
         
         // Clear the cooldown start time
-        messagingSettingsSessionManager.conversationLimitCooldownStartTime = 0
+        sessionManager.conversationLimitCooldownStartTime = 0
         
         // Cleanup and close dialog
         cleanup()
@@ -192,9 +192,9 @@ class ConversationLimitManager: ObservableObject {
     private func startNewCooldown() {
         // Store current time in milliseconds as SessionManager expects it
         let currentTimeMillis = Int64(Date().timeIntervalSince1970 * 1000)
-        messagingSettingsSessionManager.conversationLimitCooldownStartTime = currentTimeMillis
+        sessionManager.conversationLimitCooldownStartTime = currentTimeMillis
         
-        AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "startNewCooldown() Started new cooldown - Start time (ms): \(currentTimeMillis), Duration (s): \(messagingSettingsSessionManager.freeConversationsCooldownSeconds)")
+        AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "startNewCooldown() Started new cooldown - Start time (ms): \(currentTimeMillis), Duration (s): \(sessionManager.freeConversationsCooldownSeconds)")
     }
     
     private func cleanup() {
@@ -209,13 +209,13 @@ class ConversationLimitManager: ObservableObject {
     
     // MARK: - Conversation Count Management (Android Parity)
     func resetConversationsStartedCount() {
-        messagingSettingsSessionManager.conversationsStartedCount = 0
+        sessionManager.conversationsStartedCount = 0
         AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "resetConversationsStartedCount() Reset conversation count to 0")
     }
     
     func incrementConversationsStarted() {
-        let currentCount = messagingSettingsSessionManager.conversationsStartedCount
-        messagingSettingsSessionManager.conversationsStartedCount = currentCount + 1
+        let currentCount = sessionManager.conversationsStartedCount
+        sessionManager.conversationsStartedCount = currentCount + 1
         AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "incrementConversationsStarted() Incremented conversation count to: \(currentCount + 1)")
     }
     
@@ -249,7 +249,7 @@ struct ConversationLimitDialogView: View {
                 .foregroundColor(Color("dark"))
             
             // Info Text
-            Text("You've reached the limit of \(MessagingSettingsSessionManager.shared.freeConversationsLimit) new conversations. Subscribe to ChatHub Lite for unlimited access or wait for the cooldown to expire.")
+                                            Text("You've reached the limit of \(SessionManager.shared.freeConversationsLimit) new conversations. Subscribe to ChatHub Plus for unlimited access or wait for the cooldown to expire.")
                 .font(.system(size: 16))
                 .foregroundColor(Color("dark"))
                 .multilineTextAlignment(.center)
@@ -262,7 +262,7 @@ struct ConversationLimitDialogView: View {
             
             // Progress Bar
             ProgressView(value: progress, total: 1.0)
-                .progressViewStyle(LinearProgressViewStyle(tint: Color("liteGradientStart")))
+                .progressViewStyle(LinearProgressViewStyle(tint: Color("plusGradientStart")))
                 .frame(height: 8)
                 .padding(.horizontal)
             
@@ -271,14 +271,14 @@ struct ConversationLimitDialogView: View {
                 // Navigate to subscription
                 onDismiss()
             }) {
-                Text("SUBSCRIBE TO CHATHUB LITE")
+                Text("SUBSCRIBE TO CHATHUB PLUS")
                     .font(.system(size: 16, weight: .bold))
                     .foregroundColor(.white)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 14)
                     .background(
                         LinearGradient(
-                            colors: [Color("liteGradientStart"), Color("liteGradientEnd")],
+                            colors: [Color("plusGradientStart"), Color("plusGradientEnd")],
                             startPoint: .leading,
                             endPoint: .trailing
                         )
@@ -302,14 +302,14 @@ struct ConversationLimitDialogView: View {
     private func startTimer() {
         // Calculate initial remaining time
         let currentTime = Int64(Date().timeIntervalSince1970)
-        let cooldownStartTime = MessagingSettingsSessionManager.shared.conversationLimitCooldownStartTime / 1000
+                    let cooldownStartTime = SessionManager.shared.conversationLimitCooldownStartTime / 1000
         let elapsedTime = currentTime - cooldownStartTime
         remainingTime = max(0, totalDuration - elapsedTime)
         progress = Double(remainingTime) / Double(totalDuration)
         
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in
             let currentTime = Int64(Date().timeIntervalSince1970)
-            let cooldownStartTime = MessagingSettingsSessionManager.shared.conversationLimitCooldownStartTime / 1000
+            let cooldownStartTime = SessionManager.shared.conversationLimitCooldownStartTime / 1000
             let elapsedTime = currentTime - cooldownStartTime
             remainingTime = max(0, totalDuration - elapsedTime)
             progress = Double(remainingTime) / Double(totalDuration)

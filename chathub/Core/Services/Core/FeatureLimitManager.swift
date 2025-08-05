@@ -57,7 +57,7 @@ struct FeatureLimitResult {
 // MARK: - Base Feature Limit Manager
 class BaseFeatureLimitManager: FeatureLimitManager {
     let featureType: FeatureLimitType
-    internal let messagingSessionManager = MessagingSettingsSessionManager.shared
+    internal let sessionManager = SessionManager.shared
     internal let subscriptionSessionManager = SubscriptionSessionManager.shared
     
     init(featureType: FeatureLimitType) {
@@ -70,8 +70,8 @@ class BaseFeatureLimitManager: FeatureLimitManager {
     }
     
     func canPerformAction() -> Bool {
-        // Light subscription users bypass all limits
-        if subscriptionSessionManager.isUserSubscribedToLite() {
+        // Plus subscription users bypass all limits
+        if subscriptionSessionManager.isUserSubscribedToPlus() {
             return true
         }
         
@@ -112,7 +112,7 @@ class BaseFeatureLimitManager: FeatureLimitManager {
     private func isNewUser() -> Bool {
         let userSessionManager = UserSessionManager.shared
         let firstAccountTime = userSessionManager.firstAccountCreatedTime
-        let newUserPeriod = messagingSessionManager.newUserFreePeriodSeconds
+        let newUserPeriod = TimeInterval(sessionManager.newUserFreePeriodSeconds)
         
         if firstAccountTime <= 0 || newUserPeriod <= 0 {
             return false

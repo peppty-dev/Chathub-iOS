@@ -552,7 +552,7 @@ struct OnlineUsersView: View {
                             let user = viewModel.users[index]
                             ZStack {
                                 OnlineUserRow(user: user)
-                                NavigationLink(destination: ProfileView(otherUserId: user.id ?? "")) {
+                                NavigationLink(destination: ProfileView(onlineUser: user)) {
                                     EmptyView()
                                 }
                                 .opacity(0.0)

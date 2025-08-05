@@ -20,27 +20,33 @@ class MessageLimitManager: BaseFeatureLimitManager {
     
     override func getCurrentUsageCount() -> Int {
         // Use existing message tracking from MessagingSettingsSessionManager
+        let messagingSessionManager = MessagingSettingsSessionManager.shared
         return messagingSessionManager.totalNoOfMessageSent
     }
     
     override func getLimit() -> Int {
+        let messagingSessionManager = MessagingSettingsSessionManager.shared
         return messagingSessionManager.freeMessagesLimit
     }
     
     override func getCooldownDuration() -> TimeInterval {
+        let messagingSessionManager = MessagingSettingsSessionManager.shared
         return messagingSessionManager.freeMessagesCooldownSeconds
     }
     
     override func setUsageCount(_ count: Int) {
+        let messagingSessionManager = MessagingSettingsSessionManager.shared
         messagingSessionManager.totalNoOfMessageSent = count
     }
     
     override func getCooldownStartTime() -> Int64 {
         // Use existing freeMessageTime as cooldown start time
+        let messagingSessionManager = MessagingSettingsSessionManager.shared
         return Int64(messagingSessionManager.freeMessageTime)
     }
     
     override func setCooldownStartTime(_ time: Int64) {
+        let messagingSessionManager = MessagingSettingsSessionManager.shared
         messagingSessionManager.freeMessageTime = TimeInterval(time)
     }
     

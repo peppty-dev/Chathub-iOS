@@ -12,8 +12,6 @@ import Combine
 class SearchLimitManager: BaseFeatureLimitManager {
     static let shared = SearchLimitManager()
     
-    private let sessionManager = SessionManager.shared
-    
     private init() {
         super.init(featureType: .search)
     }

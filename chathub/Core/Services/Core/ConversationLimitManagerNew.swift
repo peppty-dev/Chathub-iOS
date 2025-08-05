@@ -16,48 +16,64 @@ class ConversationLimitManagerNew: BaseFeatureLimitManager {
         super.init(featureType: .conversation)
     }
     
-    // MARK: - Override Base Methods
+    // MARK: - Override Base Methods (Using SessionManager)
     
     override func getCurrentUsageCount() -> Int {
-        return messagingSessionManager.conversationsStartedCount
+        return SessionManager.shared.conversationsStartedCount
     }
     
     override func getLimit() -> Int {
-        return messagingSessionManager.freeConversationsLimit
+        return SessionManager.shared.freeConversationsLimit
     }
     
     override func getCooldownDuration() -> TimeInterval {
-        return messagingSessionManager.freeConversationsCooldownSeconds
+        return TimeInterval(SessionManager.shared.freeConversationsCooldownSeconds)
     }
     
     override func setUsageCount(_ count: Int) {
-        messagingSessionManager.conversationsStartedCount = count
+        SessionManager.shared.conversationsStartedCount = count
     }
     
     override func getCooldownStartTime() -> Int64 {
-        return messagingSessionManager.conversationLimitCooldownStartTime
+        return SessionManager.shared.conversationLimitCooldownStartTime
     }
     
     override func setCooldownStartTime(_ time: Int64) {
-        messagingSessionManager.conversationLimitCooldownStartTime = time
+        SessionManager.shared.conversationLimitCooldownStartTime = time
     }
     
     // MARK: - Conversation-Specific Methods
     
-    /// Check if conversation can be started and return detailed result
+    /// Check if conversation can be started and return detailed result (Always-Show Popup Strategy)
     func checkConversationLimit() -> FeatureLimitResult {
-        let canProceed = canPerformAction()
         let currentUsage = getCurrentUsageCount()
         let limit = getLimit()
         let remainingCooldown = getRemainingCooldown()
         
-        // Show popup if user is not premium and either at limit or in cooldown
-        let showPopup = !subscriptionSessionManager.isSubscriptionActive() && 
-                       (currentUsage >= limit || isInCooldown())
+        // Check if user can proceed without popup (Plus subscribers and new users)
+        let isPlusSubscriber = subscriptionSessionManager.isUserSubscribedToPlus()
+        let isNewUserInFreePeriod = isNewUser()
+        
+        // Plus subscribers and new users bypass popup entirely
+        if isPlusSubscriber || isNewUserInFreePeriod {
+            return FeatureLimitResult(
+                canProceed: true,
+                showPopup: false,
+                remainingCooldown: 0,
+                currentUsage: currentUsage,
+                limit: limit
+            )
+        }
+        
+        // For all other users (including Lite subscribers), always show popup (to display conversation count or timer)
+        let canProceed = canPerformAction()
+        
+        // Always show popup for non-Plus/non-new users to display progress
+        let shouldShowPopup = true
         
         return FeatureLimitResult(
             canProceed: canProceed,
-            showPopup: showPopup,
+            showPopup: shouldShowPopup,
             remainingCooldown: remainingCooldown,
             currentUsage: currentUsage,
             limit: limit
@@ -74,6 +90,22 @@ class ConversationLimitManagerNew: BaseFeatureLimitManager {
             completion(true)
         } else {
             AppLogger.log(tag: "LOG-APP: ConversationLimitManagerNew", message: "performConversationStart() Conversation blocked. In cooldown: \(isInCooldown()), remaining: \(result.remainingCooldown)s")
+            
+            // Track analytics for blocked conversation
+            if result.remainingCooldown > 0 {
+                ConversationAnalytics.shared.trackConversationBlockedCooldown(
+                    currentUsage: result.currentUsage,
+                    limit: result.limit,
+                    remainingCooldown: result.remainingCooldown
+                )
+            } else {
+                ConversationAnalytics.shared.trackConversationBlockedLimitReached(
+                    currentUsage: result.currentUsage,
+                    limit: result.limit,
+                    cooldownDuration: getCooldownDuration()
+                )
+            }
+            
             completion(false)
         }
     }
@@ -86,8 +118,26 @@ class ConversationLimitManagerNew: BaseFeatureLimitManager {
     
     /// Reset conversation usage (for testing or admin purposes)
     func resetConversationUsage() {
-        AppLogger.log(tag: "LOG-APP: ConversationLimitManagerNew", message: "resetConversationUsage() Resetting conversation usage and cooldown")
+        let previousUsage = getCurrentUsageCount()
+        let limit = getLimit()
+        
+        AppLogger.log(tag: "LOG-APP: ConversationLimitManagerNew", message: "resetConversationUsage() Resetting conversation usage and cooldown from \(previousUsage) to 0")
         resetCooldown()
+        
+        // Track analytics for limit reset
+        ConversationAnalytics.shared.trackConversationLimitReset(
+            previousUsage: previousUsage,
+            limit: limit
+        )
+    }
+    
+    /// Start cooldown when popup opens (matching refresh/filter/search behavior)
+    override func startCooldownOnPopupOpen() {
+        if getCurrentUsageCount() >= getLimit() && !isInCooldown() {
+            let currentTime = Int64(Date().timeIntervalSince1970)
+            setCooldownStartTime(currentTime)
+            AppLogger.log(tag: "LOG-APP: ConversationLimitManagerNew", message: "startCooldownOnPopupOpen() Started cooldown at popup open")
+        }
     }
     
     /// Legacy compatibility method for checking if new user
@@ -95,7 +145,7 @@ class ConversationLimitManagerNew: BaseFeatureLimitManager {
         // Check if user is within new user grace period
         let userSessionManager = UserSessionManager.shared
         let firstAccountTime = userSessionManager.firstAccountCreatedTime
-        let newUserPeriod = messagingSessionManager.newUserFreePeriodSeconds
+        let newUserPeriod = TimeInterval(SessionManager.shared.newUserFreePeriodSeconds)
         
         if firstAccountTime <= 0 || newUserPeriod <= 0 {
             return false
