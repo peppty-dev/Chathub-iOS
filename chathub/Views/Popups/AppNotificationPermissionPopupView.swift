@@ -18,8 +18,8 @@ struct AppNotificationPermissionPopupView: View {
     
     var body: some View {
         ZStack {
-            // Background overlay
-            Color.black.opacity(0.4)
+            // Background overlay - tap to dismiss with enhanced contrast
+            Color.black.opacity(0.6)
                 .ignoresSafeArea()
                 .onTapGesture {
                     // Allow dismissing by tapping outside
@@ -127,9 +127,12 @@ struct AppNotificationPermissionPopupView: View {
                 .padding(.bottom, 32)
             }
             .background(
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(Color("Background Color"))
-                    .shadow(color: .black.opacity(0.15), radius: 20, x: 0, y: 10)
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(Color("shade2"))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 20, style: .continuous)
+                            .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                    )
             )
             .padding(.horizontal, 32)
         }

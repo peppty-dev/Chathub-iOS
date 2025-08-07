@@ -35,18 +35,18 @@ class ConversationLimitManager: ObservableObject {
     func checkConversationLimitAndProceed(callback: ConversationLimitCallback) {
         AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "checkConversationLimitAndProceed() Starting conversation limit check")
             // Log subscription status for debugging
-            let isLite = subscriptionSessionManager.isUserSubscribedToLite()
-            let isPlus = subscriptionSessionManager.isUserSubscribedToPlus()
-            let isPro = subscriptionSessionManager.isUserSubscribedToPro()
+            let hasLiteAccess = subscriptionSessionManager.hasLiteTierOrHigher()
+            let hasPlusAccess = subscriptionSessionManager.hasPlusTierOrHigher()
+            let hasProAccess = subscriptionSessionManager.hasProTier()
             let isNewUser = ConversationLimitManagerNew.shared.isNewUser()
             let isActive = subscriptionSessionManager.isSubscriptionActive()
             let tier = subscriptionSessionManager.getSubscriptionTier()
             
-            AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "checkConversationLimitAndProceed() Subscription Status - Lite: \(isLite), Plus: \(isPlus), Pro: \(isPro), NewUser: \(isNewUser), Active: \(isActive), Tier: \(tier)")
+            AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "checkConversationLimitAndProceed() Subscription Status - LiteOrHigher: \(hasLiteAccess), PlusOrHigher: \(hasPlusAccess), ProOnly: \(hasProAccess), NewUser: \(isNewUser), Active: \(isActive), Tier: \(tier)")
             
-            // Check subscription status first - bypass for Plus subscribers and new users only
-            if isPlus || isNewUser {
-                AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "checkConversationLimitAndProceed() User is Plus subscriber or new user - bypassing conversation limit")
+            // Check subscription status first - bypass for Plus+ subscribers and new users
+            if hasPlusAccess || isNewUser {
+                AppLogger.log(tag: "LOG-APP: ConversationLimitManager", message: "checkConversationLimitAndProceed() User has Plus+ access or is new user - bypassing conversation limit")
                 callback.onCanProceed()
                 return
             }

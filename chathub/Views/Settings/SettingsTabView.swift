@@ -3,6 +3,7 @@ import StoreKit  // For in-app review prompt
 import UIKit
 import FirebaseFirestore
 import FirebaseAnalytics
+import SDWebImageSwiftUI
 
 // MARK: - Settings Tab View (SwiftUI)
 // Complete Android parity implementation matching SettingsFragment.java exactly
@@ -24,6 +25,9 @@ struct SettingsTabView: View {
     @State private var showInterestsDialog = false
     
     // Fix app popup state - removed since we now use NavigationManager
+    
+    // Debug subscription popup state (DEBUG ONLY)
+    @State private var showDebugSubscriptionPopup = false
     
     // App credentials (matching Android getCredentials())
     @State private var appName: String = "ChatHub"
@@ -132,17 +136,24 @@ struct SettingsTabView: View {
         .navigationTitle("Settings")
         .navigationBarTitleDisplayMode(.large)
         .background(Color("Background Color").ignoresSafeArea())
+
+
         .overlay(
             Group {
+                // Rating popup (only when manually triggered from Settings "Rate the app" button)
                 if ratingService.showRatingDialog {
-                    RatingDialogOverlayView()
+                    RatingPopupView()
+                }
+                
+                // Interests Popup Overlay (matching Android popup behavior)
+                if showInterestsDialog {
+                    InterestsPopupView(isPresented: $showInterestsDialog)
                 }
             }
         )
-
         .overlay(
-            // Interests Popup Overlay (matching Android popup behavior)
-            showInterestsDialog ? InterestsPopupView(isPresented: $showInterestsDialog) : nil
+            // Debug Subscription Popup Overlay (DEBUG ONLY)
+            debugSubscriptionPopupOverlay
         )
         .onAppear {
             AppLogger.log(tag: "LOG-APP: SettingsTabView", message: "onAppear() Settings tab loaded")
@@ -150,15 +161,9 @@ struct SettingsTabView: View {
             updateWarningsSection()
             updateAccountCreationStatus()
         }
-        .background(
-            NavigationLink(
-                destination: FeedbackView(),
-                isActive: $ratingService.navigateToFeedback
-            ) {
-                EmptyView()
-            }
-            .hidden()
-        )
+        .sheet(isPresented: $ratingService.navigateToFeedback) {
+            FeedbackView()
+        }
     }
 
     // MARK: - Profile Header (matching Android layout exactly)
@@ -175,65 +180,35 @@ struct SettingsTabView: View {
                         .blur(radius: 4)
                     
                     if let url = URL(string: UserSessionManager.shared.userProfilePhoto ?? ""), !url.absoluteString.isEmpty {
-                        AsyncImage(url: url) { phase in
-                            switch phase {
-                            case .empty:
-                                ProgressView()
-                                    .frame(width: 160, height: 160)
-                            case .success(let image):
-                                image
+                        WebImage(url: url) { image in
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                        } placeholder: {
+                            ZStack {
+                                Circle()
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [
+                                                Color("shade3"),
+                                                Color("shade4")
+                                            ],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                
+                                Image(UserSessionManager.shared.userGender == "Male" ? "male_icon" : "Female_icon")
                                     .resizable()
                                     .aspectRatio(contentMode: .fill)
-                                    .frame(width: 160, height: 160)
-                                    .clipShape(Circle())
-                            case .failure(_):
-                                ZStack {
-                                    // Gradient background for placeholder (matching ProfileView)
-                                    Circle()
-                                        .fill(
-                                            LinearGradient(
-                                                colors: [
-                                                    Color("shade3"),
-                                                    Color("shade4")
-                                                ],
-                                                startPoint: .topLeading,
-                                                endPoint: .bottomTrailing
-                                            )
-                                        )
-                                    
-                                    // Gender-based placeholder while loading - matching OnlineUsersView pattern
-                                    Image(UserSessionManager.shared.userGender == "Male" ? "male_icon" : "Female_icon")
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fill)
-                                        .opacity(0.8)
-                                }
-                                .frame(width: 160, height: 160)
-                                .clipShape(Circle())
-                            @unknown default:
-                                ZStack {
-                                    // Gradient background for placeholder (matching ProfileView)
-                                    Circle()
-                                        .fill(
-                                            LinearGradient(
-                                                colors: [
-                                                    Color("shade3"),
-                                                    Color("shade4")
-                                                ],
-                                                startPoint: .topLeading,
-                                                endPoint: .bottomTrailing
-                                            )
-                                        )
-                                    
-                                    // Gender-based placeholder while loading - matching OnlineUsersView pattern
-                                    Image(UserSessionManager.shared.userGender == "Male" ? "male_icon" : "Female_icon")
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fill)
-                                        .opacity(0.8)
-                                }
-                                .frame(width: 160, height: 160)
-                                .clipShape(Circle())
+                                    .opacity(0.8)
                             }
+                            .frame(width: 160, height: 160)
                         }
+                        .indicator(.activity)
+                        .transition(.opacity)
+                            .frame(width: 160, height: 160)
+                            .clipShape(Circle())
                     } else {
                         ZStack {
                             // Gradient background for placeholder (matching ProfileView)
@@ -350,13 +325,34 @@ struct SettingsTabView: View {
         }
     }
 
+    // MARK: - Debug Subscription Popup Overlay (DEBUG ONLY)
+    @ViewBuilder
+    private var debugSubscriptionPopupOverlay: some View {
+        #if DEBUG
+        if showDebugSubscriptionPopup {
+            DebugSubscriptionPopupView(isPresented: $showDebugSubscriptionPopup)
+        }
+        #endif
+    }
+
     // MARK: - Version Section (matching Android exactly)
     private var versionSection: some View {
         HStack {
+            #if DEBUG
             Text("Version: \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")\nBuild: \(getBuildType())\n\(Bundle.main.bundleIdentifier ?? "")")
                 .font(.system(size: 10, weight: .bold))
                 .foregroundColor(Color("shade_500"))
                 .multilineTextAlignment(.leading)
+                .onTapGesture {
+                    AppLogger.log(tag: "LOG-APP: SettingsTabView", message: "debugBuildTapped() DEBUG build info tapped - showing subscription debug popup")
+                    showDebugSubscriptionPopup = true
+                }
+            #else
+            Text("Version: \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0")")
+                .font(.system(size: 10, weight: .bold))
+                .foregroundColor(Color("shade_500"))
+                .multilineTextAlignment(.leading)
+            #endif
             Spacer()
         }
         .padding(.horizontal, 25)
@@ -590,7 +586,7 @@ struct SettingsRowView: View {
     }
 }
 
-// Rating functionality now handled by RatingService and RatingDialogOverlayView
+// Rating functionality now handled by RatingService and RatingPopupView
 // Removed duplicate popup views - using centralized system
 #Preview {
     SettingsTabView()

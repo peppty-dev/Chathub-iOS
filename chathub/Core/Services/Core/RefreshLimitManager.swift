@@ -84,16 +84,16 @@ class RefreshLimitManager: BaseFeatureLimitManager {
         // Reuse variables from earlier debug section
         let remainingCooldown = getRemainingCooldown()
         
-        // Check if user can proceed without popup (Light subscribers and new users)
-        let isLightSubscriber = subscriptionSessionManager.isUserSubscribedToLite()
+        // Check if user can proceed without popup (Lite+ subscribers and new users)
+        let hasLiteAccess = subscriptionSessionManager.hasLiteTierOrHigher()
         let isNewUserInFreePeriod = isNewUser()
         
         // Debug logging to understand user categorization
-        AppLogger.log(tag: "LOG-APP: RefreshLimitManager", message: "checkRefreshLimit() - isLiteSubscriber: \(isLightSubscriber), isNewUser: \(isNewUserInFreePeriod), currentUsage: \(currentUsage), limit: \(limit), wasAutoReset: \(wasAutoReset)")
+        AppLogger.log(tag: "LOG-APP: RefreshLimitManager", message: "checkRefreshLimit() - hasLiteAccess: \(hasLiteAccess), isNewUser: \(isNewUserInFreePeriod), currentUsage: \(currentUsage), limit: \(limit), wasAutoReset: \(wasAutoReset)")
         
-        // Light subscribers and new users bypass popup entirely
-        if isLightSubscriber || isNewUserInFreePeriod {
-            AppLogger.log(tag: "LOG-APP: RefreshLimitManager", message: "checkRefreshLimit() - User bypassing popup (Lite: \(isLightSubscriber), New: \(isNewUserInFreePeriod))")
+        // Lite+ subscribers and new users bypass popup entirely
+        if hasLiteAccess || isNewUserInFreePeriod {
+            AppLogger.log(tag: "LOG-APP: RefreshLimitManager", message: "checkRefreshLimit() - User bypassing popup (LiteOrHigher: \(hasLiteAccess), New: \(isNewUserInFreePeriod))")
             return FeatureLimitResult(
                 canProceed: true,
                 showPopup: false,

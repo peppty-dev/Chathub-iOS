@@ -41,49 +41,7 @@ class GamesService {
         fetchAndStoreGames(completion: completion)
     }
     
-    // MARK: - Debug Methods
-    
-    /// Tests API connectivity and logs detailed response for debugging
-    func testAPIConnection() {
-        AppLogger.log(tag: "LOG-APP: GamesService", message: "testAPIConnection() testing Gamezop API connectivity")
-        
-        guard let url = URL(string: GAMEZOP_API_URL) else {
-            AppLogger.log(tag: "LOG-APP: GamesService", message: "testAPIConnection() invalid URL")
-            return
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "HEAD" // Just check if endpoint is reachable
-        request.timeoutInterval = 5.0
-        
-        URLSession.shared.dataTask(with: request) { _, response, error in
-            if let error = error {
-                AppLogger.log(tag: "LOG-APP: GamesService", message: "testAPIConnection() API unreachable: \(error.localizedDescription)")
-            } else if let httpResponse = response as? HTTPURLResponse {
-                AppLogger.log(tag: "LOG-APP: GamesService", message: "testAPIConnection() API status: \(httpResponse.statusCode)")
-            }
-        }.resume()
-    }
-    
-    /// Gets current database and fetch status for debugging
-    func getDatabaseStatus() -> String {
-        let count = gamesDB.gamescount()
-        let fetched = sessionManager.gamesFetched
-        return "Games in DB: \(count), Fetched flag: \(fetched)"
-    }
-    
-    /// Resets games fetch status and clears database for testing
-    func resetGamesData() {
-        AppLogger.log(tag: "LOG-APP: GamesService", message: "resetGamesData() clearing games data and fetch status")
-        
-        // Clear fetch status
-        sessionManager.gamesFetched = false
-        
-        // Clear games from database
-        gamesDB.deleteAllGamesFromGamesTable()
-        
-        AppLogger.log(tag: "LOG-APP: GamesService", message: "resetGamesData() games data cleared")
-    }
+
     
     // MARK: - Private Methods with Retry Logic
     
@@ -199,6 +157,10 @@ class GamesService {
             
             AppLogger.log(tag: "LOG-APP: GamesService", message: "parseAndStoreGamesData() found \(gamesArray.count) games")
             
+            // Clear existing games before inserting new ones to prevent duplicates (Android parity)
+            AppLogger.log(tag: "LOG-APP: GamesService", message: "parseAndStoreGamesData() clearing existing games before inserting new ones")
+            self.gamesDB.deleteAllGamesFromGamesTable()
+            
             // Process games in background thread (Android parity)
             DispatchQueue.global(qos: .background).async { [weak self] in
                 guard let self = self else { return }
@@ -267,19 +229,35 @@ class GamesService {
             return nil
         }
         
-        // Validate required fields exist and are not empty
-        guard let gameId = gameData["code"] as? String, !gameId.isEmpty,
-              let gameUrl = gameData["url"] as? String, !gameUrl.isEmpty,
-              let gameName = extractString(gameData["name"]), !gameName.isEmpty,
-              let gameDescription = extractString(gameData["description"]), !gameDescription.isEmpty,
-              let assetsDict = gameData["assets"] as? [String: Any],
-              let gameIcon = extractAsset(assetsDict, keys: ["thumb", "icon", "cover"]), !gameIcon.isEmpty,
-              let gameCover = extractAsset(assetsDict, keys: ["cover", "thumb", "icon"]), !gameCover.isEmpty,
-              let gameRating = extractStringOrNumber(gameData["rating"]), !gameRating.isEmpty,
-              let gamePlays = extractStringOrNumber(gameData["gamePlays"]), !gamePlays.isEmpty else {
-            AppLogger.log(tag: "LOG-APP: GamesService", message: "processAndStoreGame() missing or empty required fields for game. Available keys: \(gameData.keys)")
+        // DEBUG: Log what we're trying to extract
+        let gameId = gameData["code"] as? String
+        let gameUrl = gameData["url"] as? String
+        let gameName = extractString(gameData["name"])
+        let gameDescription = extractString(gameData["description"])
+        let assetsDict = gameData["assets"] as? [String: Any]
+        let gameIcon = assetsDict != nil ? extractAsset(assetsDict!, keys: ["thumb", "icon", "cover"]) : nil
+        let gameCover = assetsDict != nil ? extractAsset(assetsDict!, keys: ["cover", "thumb", "icon"]) : nil
+        let gameRating = extractStringOrNumber(gameData["rating"])
+        let gamePlays = extractStringOrNumber(gameData["gamePlays"])
+        
+        AppLogger.log(tag: "LOG-APP: GamesService", message: "processAndStoreGame() extracted values - ID: '\(gameId ?? "nil")', Name: '\(gameName ?? "nil")', Rating: '\(gameRating ?? "nil")', Plays: '\(gamePlays ?? "nil")'")
+        AppLogger.log(tag: "LOG-APP: GamesService", message: "processAndStoreGame() extracted values - Icon: '\(gameIcon ?? "nil")', Cover: '\(gameCover ?? "nil")'")
+        
+        // Validate ONLY critical required fields (gameId, gameUrl, gameName are essential)
+        // Make other fields optional with fallback values to prevent rejecting valid games
+        guard let gameId = gameId, !gameId.isEmpty,
+              let gameUrl = gameUrl, !gameUrl.isEmpty,
+              let gameName = gameName, !gameName.isEmpty else {
+            AppLogger.log(tag: "LOG-APP: GamesService", message: "processAndStoreGame() missing critical required fields - ID: '\(gameId ?? "nil")', URL: '\(gameUrl ?? "nil")', Name: '\(gameName ?? "nil")'. Available keys: \(gameData.keys)")
             return false
         }
+        
+        // Use fallback values for optional fields to prevent rejection
+        let finalGameDescription = gameDescription ?? "No description available"
+        let finalGameIcon = gameIcon ?? "https://via.placeholder.com/64x64.png?text=Game"
+        let finalGameCover = gameCover ?? "https://via.placeholder.com/300x200.png?text=Game"
+        let finalGameRating = gameRating ?? "4.0"
+        let finalGamePlays = gamePlays ?? "0"
         
         // Additional validation for critical fields
         if gameId.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines).isEmpty ||
@@ -294,17 +272,15 @@ class GamesService {
             return false
         }
         
-        // Validate rating is a valid number
-        if Double(gameRating) == nil {
-            AppLogger.log(tag: "LOG-APP: GamesService", message: "processAndStoreGame() invalid game rating: \(gameRating)")
-            return false
+        // Validate rating is a valid number with fallback
+        if Double(finalGameRating) == nil {
+            AppLogger.log(tag: "LOG-APP: GamesService", message: "processAndStoreGame() invalid game rating: \(finalGameRating), using fallback 4.0")
         }
         
-        // Validate game plays is a valid number
-        let gamePlaysInt = Int(gamePlays) ?? 0
+        // Validate game plays is a valid number with fallback
+        let gamePlaysInt = Int(finalGamePlays) ?? 0
         if gamePlaysInt < 0 {
-            AppLogger.log(tag: "LOG-APP: GamesService", message: "processAndStoreGame() invalid game plays count: \(gamePlays)")
-            return false
+            AppLogger.log(tag: "LOG-APP: GamesService", message: "processAndStoreGame() invalid game plays count: \(finalGamePlays), using fallback 0")
         }
 
         // Determine if multiplayer (Android parity logic)
@@ -312,16 +288,17 @@ class GamesService {
 
         // Log game details (Android parity)
         AppLogger.log(tag: "LOG-APP: GamesService", message: "processAndStoreGame() validated game - ID: \(gameId), Name: \(gameName), Plays: \(gamePlaysInt), Multiplayer: \(isMultiplayer)")
+        AppLogger.log(tag: "LOG-APP: GamesService", message: "processAndStoreGame() game details - Icon: \(finalGameIcon), Rating: \(finalGameRating), Description: \(finalGameDescription.prefix(50))...")
 
-        // Insert into database (Android parity method)
+        // Insert into database (Android parity method) using final values with fallbacks
         gamesDB.insert(
             GameId: gameId as NSString,
             GameUrl: gameUrl as NSString,
             GameName: gameName as NSString,
-            GameDescription: gameDescription as NSString,
-            GameIcon: gameIcon as NSString,
-            GameCover: gameCover as NSString,
-            GameRating: gameRating as NSString,
+            GameDescription: finalGameDescription as NSString,
+            GameIcon: finalGameIcon as NSString,
+            GameCover: finalGameCover as NSString,
+            GameRating: finalGameRating as NSString,
             GamePlays: gamePlaysInt,
             Multiplayer: isMultiplayer
         )

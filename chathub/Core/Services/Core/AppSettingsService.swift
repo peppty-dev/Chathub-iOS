@@ -87,122 +87,86 @@ class AppSettingsWorker {
         // ==========================================
         // App Version and Update Settings
         // ==========================================
-        if let version = data["version"] as? Int64 {
+        if let version = data["liveAppVersionCode"] as? Int64 {
             sessionManager.liveAppVersion = version
         }
         
-        if let updateMandatory = data["updateMandatory"] as? Bool {
+        if let updateMandatory = data["isUpdateMandatory"] as? Bool {
             sessionManager.updateMandatory = updateMandatory
         }
         
-        if let maintenance = data["maintenance"] as? Bool {
+        if let maintenance = data["isMaintenanceMode"] as? Bool {
             sessionManager.maintenance = maintenance
         }
         
-        if let updateDetails = data["updateDetails"] as? String {
-            sessionManager.updateDetails = updateDetails
-        }
-        
-        // ==========================================
-        // Feature Toggle Settings
-        // ==========================================
-        if let extraFeaturesEnabled = data["extraFeaturesEnabled"] as? Bool {
-            sessionManager.extraFeaturesEnabled = extraFeaturesEnabled
+        if let updateMessage = data["updateMessage"] as? String {
+            sessionManager.updateDetails = updateMessage
         }
         
         // ==========================================
         // Direct Communication Settings
         // ==========================================
-        if let liveEnabled = data["liveEnabled"] as? Bool {
+        if let liveEnabled = data["isLiveEnabled"] as? Bool {
             sessionManager.liveEnabled = liveEnabled
-        }
-        
-        // ==========================================
-        // Advertisement Settings (Gender-specific)
-        // ==========================================
-        if sessionManager.keyUserGender?.lowercased() == "male" {
-            if let adIntervalSeconds = data["adIntervalSeconds"] as? Int64 {
-                sessionManager.adIntervalSeconds = adIntervalSeconds
-            }
-        } else {
-            if let adIntervalSecondsWoman = data["adIntervalSecondsWoman"] as? Int64 {
-                sessionManager.adIntervalSeconds = adIntervalSecondsWoman
-            }
-        }
-        
-        if let enableInFeedAds = data["enableInFeedAds"] as? Bool {
-            sessionManager.enableInFeedAds = enableInFeedAds
-        }
-        
-        if sessionManager.keyUserGender?.lowercased() == "male" {
-            if let inFeedAdsCount = data["inFeedAdsCount"] as? Int64 {
-                sessionManager.inFeedAdsCount = inFeedAdsCount
-            }
-        } else {
-            if let inFeedAdsCountWoman = data["inFeedAdsCountWoman"] as? Int64 {
-                sessionManager.inFeedAdsCount = inFeedAdsCountWoman
-            }
         }
         
         // ==========================================
         // App Analytics and Rating Settings
         // ==========================================
-        if let appActivityCount = data["appActivityCount"] as? Int64 {
-            sessionManager.appActivityCount = appActivityCount
+        if let minChatsBeforeRatePrompt = data["minChatsBeforeRatePrompt"] as? Int64 {
+            sessionManager.maxChatsForRateUsRequest = minChatsBeforeRatePrompt
         }
         
-        if let maxChatsForRateUsRequest = data["maxChatsForRateUsRequest"] as? Int64 {
-            sessionManager.maxChatsForRateUsRequest = maxChatsForRateUsRequest
-        }
-        
-        if let maxRateUsRequests = data["maxRateUsRequests"] as? Int64 {
-            sessionManager.maxRateUsRequests = maxRateUsRequests
+        if let maxRatePrompts = data["maxRatePrompts"] as? Int64 {
+            sessionManager.maxRateUsRequests = maxRatePrompts
         }
         
         // ==========================================
         // AI Chat Configuration Settings (Gender-specific)
         // ==========================================
         if sessionManager.keyUserGender?.lowercased() == "male" {
-            if let aiChatEnabled = data["aiChatEnabled"] as? Bool {
+            if let aiChatEnabled = data["isAiChatEnabled"] as? Bool {
                 sessionManager.aiChatEnabled = aiChatEnabled
             }
         } else {
-            if let aiChatEnabledWoman = data["aiChatEnabledWoman"] as? Bool {
-                sessionManager.aiChatEnabled = aiChatEnabledWoman
+            if let aiChatEnabledFemale = data["isAiChatEnabledFemale"] as? Bool {
+                sessionManager.aiChatEnabled = aiChatEnabledFemale
             }
         }
         
-        if let maxIdleSecondsForAiChatEnabling = data["maxIdleSecondsForAiChatEnabling"] as? Int64 {
+        if let maxIdleSecondsForAiChatEnabling = data["aiChatEnableMaxIdleSeconds"] as? Int64 {
             sessionManager.maxIdleSecondsForAiChatEnabling = maxIdleSecondsForAiChatEnabling
         }
         
-        if let minOfflineSecondsForAiChatEnabling = data["minOfflineSecondsForAiChatEnabling"] as? Int64 {
+        if let minOfflineSecondsForAiChatEnabling = data["aiChatEnableMinOfflineSeconds"] as? Int64 {
             sessionManager.minOfflineSecondsForAiChatEnabling = minOfflineSecondsForAiChatEnabling
         }
         
-        if let aiChatBotURL = data["aiChatBotURL"] as? String {
+        if let aiChatBotURL = data["aiChatbotUrl"] as? String {
             sessionManager.aiChatBotURL = aiChatBotURL
         }
         
         // ==========================================
         // Monetization and Limits Settings
         // ==========================================
-        if let newUserFreePeriodSeconds = data["newUserFreePeriodSeconds"] as? Int64 {
-            sessionManager.newUserFreePeriodSeconds = newUserFreePeriodSeconds
+        if let freeTrialEndsAtSeconds = data["freeTrialEndsAtSeconds"] as? Int64 {
+            sessionManager.newUserFreePeriodSeconds = freeTrialEndsAtSeconds
         }
         
-        if let featureMonetizationPopUpCoolDownSeconds = data["featureMonetizationPopUpCoolDownSeconds"] as? Int64 {
-            sessionManager.featureMonetizationPopUpCoolDownSeconds = featureMonetizationPopUpCoolDownSeconds
+        if let featureMonetizationPopupCooldownSeconds = data["featureMonetizationPopupCooldownSeconds"] as? Int64 {
+            sessionManager.featureMonetizationPopUpCoolDownSeconds = featureMonetizationPopupCooldownSeconds
         }
         
         // ==========================================
         // Free User Message Limit Settings
         // ==========================================
         if let freeMessagesLimit = data["freeMessagesLimit"] as? Int64 {
+            // Store message limit configs in SessionManager for consistency with other limit features
             sessionManager.freeMessagesLimit = Int(freeMessagesLimit)
         }
         
         if let freeMessagesCooldownSeconds = data["freeMessagesCooldownSeconds"] as? Int64 {
+            // Store message limit configs in SessionManager for consistency with other limit features
             sessionManager.freeMessagesCooldownSeconds = Int(freeMessagesCooldownSeconds)
         }
         
@@ -215,6 +179,14 @@ class AppSettingsWorker {
         
         if let freeConversationsCooldownSeconds = data["freeConversationsCooldownSeconds"] as? Int64 {
             sessionManager.freeConversationsCooldownSeconds = Int(freeConversationsCooldownSeconds)
+        }
+
+        // ==========================================
+        // Shadow Ban (Text Moderation) Settings
+        // ==========================================
+        if let sbDuration = data["textModerationShadowBanLockDurationSeconds"] as? Int64 {
+            // Store in UserDefaults with a well-known key so ModerationManagerService can read it
+            sessionManager.defaults.set(Int(sbDuration), forKey: "TEXT_MODERATION_SB_LOCK_DURATION_SECONDS")
         }
         
         // ==========================================

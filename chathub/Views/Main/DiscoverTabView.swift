@@ -2,21 +2,26 @@ import SwiftUI
 import FirebaseFirestore
 import FirebaseAuth
 import Combine
+import SDWebImageSwiftUI
 
 
 
 // MARK: - DiscoverTabView
 struct DiscoverTabView: View {
-    @StateObject private var viewModel = DiscoverTabViewModel()
+    @ObservedObject var viewModel: DiscoverTabViewModel
     @State private var showSubscriptionPopup: Bool = false
     @State private var showSearchLimitPopup: Bool = false
     @State private var searchLimitResult: FeatureLimitResult?
     
+    // Use AppStorage for persistent state that survives tab switching
+    @AppStorage("discoverTabView_hasInitiallyLoaded") private var hasInitiallyLoaded = false
+    
     // Callback to notify parent when search field is focused
     var onSearchFocusChanged: ((Bool) -> Void)?
     
-    // Custom initializer to support onSearchFocusChanged parameter
-    init(onSearchFocusChanged: ((Bool) -> Void)? = nil) {
+    // Custom initializer to support viewModel and onSearchFocusChanged parameters
+    init(viewModel: DiscoverTabViewModel? = nil, onSearchFocusChanged: ((Bool) -> Void)? = nil) {
+        self.viewModel = viewModel ?? DiscoverTabViewModel()
         self.onSearchFocusChanged = onSearchFocusChanged
     }
     
@@ -41,12 +46,36 @@ struct DiscoverTabView: View {
         .navigationTitle("")
         .navigationBarHidden(true)
         .onAppear {
-            setupView()
+            AppLogger.log(tag: "LOG-APP: DiscoverTabView", message: "viewDidAppear() - Discover tab view appeared")
+            AppLogger.log(tag: "LOG-APP: DiscoverTabView", message: "viewDidAppear() - Current notifications count: \(viewModel.notifications.count)")
+            AppLogger.log(tag: "LOG-APP: DiscoverTabView", message: "viewDidAppear() - isLoading: \(viewModel.isLoading)")
+            AppLogger.log(tag: "LOG-APP: DiscoverTabView", message: "viewDidAppear() - hasInitiallyLoaded: \(hasInitiallyLoaded)")
+            
+            // EFFICIENCY FIX: Only load if we haven't loaded before or have no data
+            if !hasInitiallyLoaded || viewModel.notifications.isEmpty {
+                AppLogger.log(tag: "LOG-APP: DiscoverTabView", message: "viewDidAppear() - First time loading or no data present, checking if data load needed")
+                
+                // Use proper initial load method that respects data state
+                AppLogger.log(tag: "LOG-APP: DiscoverTabView", message: "viewDidAppear() - Calling initialLoadIfNeeded")
+                viewModel.initialLoadIfNeeded()
+                
+                // Only set the flag to true if we actually have data now
+                if !viewModel.notifications.isEmpty {
+                    hasInitiallyLoaded = true
+                    AppLogger.log(tag: "LOG-APP: DiscoverTabView", message: "viewDidAppear() - Data loaded successfully, setting hasInitiallyLoaded to true")
+                } else {
+                    AppLogger.log(tag: "LOG-APP: DiscoverTabView", message: "viewDidAppear() - No data loaded yet, will retry on next view appearance")
+                }
+            } else {
+                AppLogger.log(tag: "LOG-APP: DiscoverTabView", message: "viewDidAppear() - Already loaded before with data (\(viewModel.notifications.count) notifications), skipping reload")
+                // Still mark notifications as seen for badge management
+                InAppNotificationsSyncService.shared.markNotificationsAsSeenInLocalDB()
+            }
         }
         .onDisappear {
             cleanupView()
         }
-        .background(subscriptionNavigationLink)
+        .background(subscriptionPresentation)
 
         .overlay(searchLimitPopupOverlay)
     }
@@ -154,9 +183,31 @@ struct DiscoverTabView: View {
                     // Actual content that will be displayed
                     DiscoverNotificationRow(notification: notification)
                         .contentShape(Rectangle()) // Makes entire row tappable
+                        .onAppear {
+                            // Load more notifications when approaching the end
+                            if notification.id == viewModel.notifications.last?.id {
+                                viewModel.loadMoreNotifications()
+                            }
+                        }
                 }
                 .listRowInsets(EdgeInsets())
                 .listRowSeparator(.hidden)
+            }
+            
+            // Loading indicator for infinite scroll
+            if viewModel.isLoadingMore && viewModel.hasMoreNotifications {
+                HStack {
+                    Spacer()
+                    ProgressView()
+                        .scaleEffect(0.8)
+                    Text("Loading more...")
+                        .font(.caption)
+                        .foregroundColor(.gray)
+                    Spacer()
+                }
+                .listRowInsets(EdgeInsets())
+                .listRowSeparator(.hidden)
+                .padding(.vertical, 10)
             }
         }
         .listStyle(.plain)
@@ -179,14 +230,11 @@ struct DiscoverTabView: View {
             }
     }
     
-    private var subscriptionNavigationLink: some View {
-        NavigationLink(
-            destination: SubscriptionView(),
-            isActive: $showSubscriptionPopup
-        ) {
-            EmptyView()
-        }
-        .hidden()
+    private var subscriptionPresentation: some View {
+        EmptyView()
+            .sheet(isPresented: $showSubscriptionPopup) {
+                SubscriptionView()
+            }
     }
     
 
@@ -224,8 +272,7 @@ struct DiscoverTabView: View {
     private func setupView() {
         AppLogger.log(tag: "LOG-APP: DiscoverView", message: "setupView() Setting up discover view - Android onResume() equivalent")
         
-        // CRITICAL FIX: Load notifications like Android SearchFragment.onResume() does
-        // This ensures notifications are loaded every time the view appears
+        // Load all notifications from local database (both seen and unseen)
         viewModel.loadNotificationsFromLocalDB()
         viewModel.markNotificationsLoaded()
         
@@ -233,11 +280,9 @@ struct DiscoverTabView: View {
         viewModel.refreshNotifications()
         
         // Mark notifications as seen when discover tab is viewed (Android parity)
-        // Delay to ensure UI is fully loaded before marking as seen
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            InAppNotificationsSyncService.shared.markNotificationsAsSeenInLocalDB()
-            AppLogger.log(tag: "LOG-APP: DiscoverView", message: "setupView() Marked notifications as seen in local database")
-        }
+        // This only affects the badge count, not the notification display
+        InAppNotificationsSyncService.shared.markNotificationsAsSeenInLocalDB()
+        AppLogger.log(tag: "LOG-APP: DiscoverView", message: "setupView() Marked notifications as seen in local database")
     }
     
     private func cleanupView() {
@@ -392,7 +437,7 @@ struct DiscoverSearchBar: View {
                 .focused($isTextFieldFocused)
                 .textInputAutocapitalization(.never)
                 .keyboardType(.default)
-                .onChange(of: text) { newValue in
+                .onChange(of: text) { _, newValue in
                     onTextChanged(newValue)
                 }
                 .onSubmit {
@@ -409,7 +454,7 @@ struct DiscoverSearchBar: View {
                         .onTapGesture {
             isTextFieldFocused = true
         }
-        .onChange(of: isTextFieldFocused) { focused in
+        .onChange(of: isTextFieldFocused) { _, focused in
             onFocusChanged?(focused)
         }
         .animation(.none, value: isTextFieldFocused) // Disable animations that might cause lag
@@ -424,45 +469,37 @@ struct DiscoverSearchResultRow: View {
             // Profile Image - matching OnlineUsersView 65dp size exactly
             ZStack {
                 if let url = URL(string: user.userImage), !user.userImage.isEmpty {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .empty:
-                            ProgressView()
-                                .frame(width: 65, height: 65)
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .transition(.opacity.animation(.easeInOut(duration: 0.5)))
-                                .frame(width: 65, height: 65)
-                                .clipShape(Circle())
-                                .overlay(
-                                    Circle()
-                                        .stroke(AppTheme.shade2, lineWidth: 2)
-                                )
-                        case .failure(_):
-                            // Gender-based gradient placeholder while image loads - matching Android design
-                            Image(user.userGender.lowercased() == "male" ? "male_icon" : "Female_icon")
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: 65, height: 65)
-                                .clipShape(Circle())
-                                .overlay(
-                                    Circle()
-                                        .stroke(AppTheme.shade2, lineWidth: 2)
-                                )
-                        @unknown default:
-                            Image(user.userGender.lowercased() == "male" ? "male_icon" : "Female_icon")
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: 65, height: 65)
-                                .clipShape(Circle())
-                                .overlay(
-                                    Circle()
-                                        .stroke(AppTheme.shade2, lineWidth: 2)
-                                )
-                        }
+                    WebImage(url: url) { image in
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        Image(user.userGender.lowercased() == "male" ? "male_icon" : "Female_icon")
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 65, height: 65)
                     }
+                    .onSuccess { image, data, cacheType in
+                        // Image loaded successfully
+                    }
+                    .onFailure { error in
+                        // Image loading failed
+                    }
+                                    .indicator(.activity)
+                    .transition(.opacity)
+                        .frame(width: 65, height: 65)
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(AppTheme.shade2, lineWidth: 2)
+                        )
+                        .background(
+                            Image(user.userGender.lowercased() == "male" ? "male_icon" : "Female_icon")
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 65, height: 65)
+                                .clipShape(Circle())
+                        )
                 } else {
                     // Default gradient placeholder based on gender - matching Android design
                     Image(user.userGender.lowercased() == "male" ? "male_icon" : "Female_icon")
@@ -481,31 +518,32 @@ struct DiscoverSearchResultRow: View {
             .padding(.top, 10)
             .padding(.bottom, 10)
             
-            // Content section - matching OnlineUsersView layout
-            VStack(alignment: .leading, spacing: 5) {
-                // Username - matching Android 16sp
+            // Content section - centered vertically
+            VStack(alignment: .leading, spacing: 4) {
+                Spacer() // Top spacer for vertical centering
+                
+                // Username
                 Text(Profanity.share.removeProfanityNumbersAllowed(user.userName))
-                    .font(.system(size: 16, weight: .regular))
+                    .font(.system(size: 16, weight: .medium))
                     .foregroundColor(AppTheme.darkText)
                     .lineLimit(1)
-                    .padding(.top, 18)
                 
-                // Gender section - matching OnlineUsersView LinearLayout with icon + text
+                // Gender section
                 HStack(spacing: 5) {
-                    // Gender icon - sized to match text height
+                    // Gender icon
                     Image(user.userGender.lowercased() == "male" ? "male_symbol" : "female_symbol")
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(width: 16, height: 16)
+                        .frame(width: 14, height: 14)
                         .padding(.top, 1)
                     
-                    // Gender text - matching OnlineUsersView with Android color matching
+                    // Gender text
                     Text(user.userGender.capitalized)
-                        .font(.system(size: 16, weight: .regular))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundColor(user.userGender.lowercased() == "male" ? AppTheme.darkBlue : AppTheme.warningOrange)
                 }
                 
-                Spacer()
+                Spacer() // Bottom spacer for vertical centering
             }
             .padding(.leading, 20)
             .padding(.trailing, 15)
@@ -574,151 +612,172 @@ struct DiscoverSearchResultRow: View {
 }
 
 struct DiscoverNotificationRow: View {
-    let notification: InAppNotificationDetails
+let notification: InAppNotificationDetails
     
     var body: some View {
         HStack(spacing: 0) {
-            // Profile Image with notification type overlay - matching Android design
-            ZStack(alignment: .bottomTrailing) {
-                ZStack {
-                    if let url = URL(string: notification.NotificationImage), !notification.NotificationImage.isEmpty {
-                        AsyncImage(url: url) { phase in
-                            switch phase {
-                            case .empty:
-                                ProgressView()
-                                    .frame(width: 65, height: 65)
-                            case .success(let image):
-                                image
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: 65, height: 65)
-                                    .clipShape(Circle())
-                                    .overlay(
-                                        Circle()
-                                            .stroke(AppTheme.shade2, lineWidth: 2)
-                                    )
-                            case .failure(_):
-                                // Gender-based gradient placeholder while image loads - matching Android design
-                                Image(notification.NotificationGender.lowercased() == "male" ? "male_icon" : "Female_icon")
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: 65, height: 65)
-                                    .clipShape(Circle())
-                                    .overlay(
-                                        Circle()
-                                            .stroke(AppTheme.shade2, lineWidth: 2)
-                                    )
-                            @unknown default:
-                                Image(notification.NotificationGender.lowercased() == "male" ? "male_icon" : "Female_icon")
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: 65, height: 65)
-                                    .clipShape(Circle())
-                                    .overlay(
-                                        Circle()
-                                            .stroke(AppTheme.shade2, lineWidth: 2)
-                                    )
-                            }
-                        }
-                } else {
-                        // Default gradient placeholder based on gender - matching Android design
+            // Profile Image section - clean without overlay like Games/Chats tabs
+            ZStack {
+                if let url = URL(string: notification.NotificationImage), !notification.NotificationImage.isEmpty {
+                    WebImage(url: url) { image in
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        Image(notification.NotificationGender.lowercased() == "male" ? "male_icon" : "Female_icon")
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 65, height: 65)
+                    }
+                    .onSuccess { image, data, cacheType in
+                        // Image loaded successfully
+                    }
+                    .onFailure { error in
+                        // Image loading failed
+                    }
+                    .indicator(.activity)
+                    .transition(.opacity)
+                    .frame(width: 65, height: 65)
+                    .clipShape(Circle())
+                    .overlay(
+                        Circle()
+                            .stroke(AppTheme.shade2, lineWidth: 2)
+                    )
+                    .background(
                         Image(notification.NotificationGender.lowercased() == "male" ? "male_icon" : "Female_icon")
                             .resizable()
                             .aspectRatio(contentMode: .fill)
                             .frame(width: 65, height: 65)
                             .clipShape(Circle())
-                            .overlay(
-                                Circle()
-                                    .stroke(AppTheme.shade2, lineWidth: 2)
-                            )
-                    }
+                    )
+                } else {
+                    // Default gradient placeholder based on gender - matching Android design
+                    Image(notification.NotificationGender.lowercased() == "male" ? "male_icon" : "Female_icon")
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 65, height: 65)
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(AppTheme.shade2, lineWidth: 2)
+                        )
                 }
-                .frame(width: 65, height: 65)
-                
-                // Notification type icon overlay - matching Android 32dp size and position
-                Image(notificationIconName)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(width: 20, height: 20)
-                    .foregroundColor(Color("shade_800"))
-                    .padding(6)
-                    .background(
-                        Circle()
-                            .fill(Color("shade_200"))
-                            .frame(width: 32, height: 32)
-                    )
-                    .overlay(
-                        Circle()
-                            .stroke(Color("Background Color"), lineWidth: 2)
-                            .frame(width: 32, height: 32)
-                    )
             }
+            .frame(width: 65, height: 65)
             .padding(.leading, 15)
             .padding(.top, 10)
             .padding(.bottom, 10)
             
-            // Content section - matching OnlineUsersView layout
-            VStack(alignment: .leading, spacing: 5) {
-                // Name - matching Android 16sp
+            // Content section - centered vertically
+            VStack(alignment: .leading, spacing: 4) {
+                Spacer() // Top spacer for vertical centering
+                
+                // Name
                 Text(Profanity.share.removeProfanityNumbersAllowed(notification.NotificationName))
-                    .font(.system(size: 16, weight: .regular))
+                    .font(.system(size: 16, weight: .medium))
                     .foregroundColor(Color("dark"))
                     .lineLimit(1)
-                    .padding(.top, 15)
                 
-                // Action and time - matching Android design
+                // Action and time
                 Text(notificationMessage)
-                    .font(.system(size: 15, weight: .regular))
+                    .font(.system(size: 13, weight: .medium))
                     .foregroundColor(.gray)
                     .lineLimit(2)
                 
-                Spacer()
+                Spacer() // Bottom spacer for vertical centering
             }
             .padding(.leading, 20)
             .padding(.trailing, 15)
             
             Spacer()
+            
+            // Notification type icon - positioned on far right like Games/Chats tabs
+            ZStack {
+                Circle()
+                    .fill(AppTheme.shade200)
+                    .frame(width: 34, height: 34)
+                
+                Image(notificationIconName)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 18, height: 18)
+                    .foregroundColor(AppTheme.shade6)
+            }
         }
         .padding(.trailing, 20)
         .background(Color("Background Color"))
         .contentShape(Rectangle())
     }
     
-    // Update notificationMessage to only handle profileview
+    // Handle all notification types gracefully
     private var notificationMessage: String {
         let timeAgo = formatTimeAgo(notification.NotificationTime)
         
-        switch InAppNotificationDetails.NotificationType(rawValue: notification.NotificationType) {
-        case .profileview:
+        // Handle all notification types dynamically based on the type string
+        switch notification.NotificationType.lowercased() {
+        case "profileview":
             return "Viewed your profile · \(timeAgo)"
+        case "message":
+            return "Sent you a message · \(timeAgo)"
+        case "call":
+            return "Called you · \(timeAgo)"
+        case "videocall":
+            return "Video called you · \(timeAgo)"
+        case "like":
+            return "Liked your profile · \(timeAgo)"
+        case "friend":
+            return "Sent a friend request · \(timeAgo)"
+        case "gift":
+            return "Sent you a gift · \(timeAgo)"
         default:
-            return "New notification · \(timeAgo)"
+            // For any other notification type, show it dynamically
+            return "\(notification.NotificationType.capitalized) · \(timeAgo)"
         }
     }
     
-    // Update notificationIconName to only handle profileview
+    // Handle all notification types gracefully with appropriate icons
     private var notificationIconName: String {
-        switch InAppNotificationDetails.NotificationType(rawValue: notification.NotificationType) {
-        case .profileview:
+        switch notification.NotificationType.lowercased() {
+        case "profileview":
             return "eye_icon" // Eye icon for profile views
+        case "message":
+            return "message_icon" // Message icon
+        case "call":
+            return "call_icon" // Call icon
+        case "videocall":
+            return "video_call_icon" // Video call icon
+        case "like":
+            return "heart_icon" // Heart icon for likes
+        case "friend":
+            return "person_add_icon" // Person add icon for friend requests
+        case "gift":
+            return "gift_icon" // Gift icon
         default:
-            return "eye_icon" // Default eye icon
+            // Default notification icon for unknown types
+            return "bell" // Default bell icon
         }
     }
     
     private func formatTimeAgo(_ timestamp: String) -> String {
-        guard let timeInterval = Double(timestamp) else { return "now" }
-        let date = Date(timeIntervalSince1970: timeInterval)
-        let hours = Date().timeIntervalSince(date)
+        guard let timeInterval = Double(timestamp) else { 
+            return "now" 
+        }
         
-        if hours < 3600 {
-            let minutes = Int(hours / 60)
+        // Handle both seconds and milliseconds timestamps
+        let finalTimeInterval = timeInterval > 1000000000000 ? timeInterval / 1000 : timeInterval
+        let date = Date(timeIntervalSince1970: finalTimeInterval)
+        let timeDifference = Date().timeIntervalSince(date)
+        
+        if timeDifference < 60 {
+            return "now"
+        } else if timeDifference < 3600 {
+            let minutes = Int(timeDifference / 60)
             return "\(minutes)m"
-        } else if hours < 86400 {
-            let hoursInt = Int(hours / 3600)
-            return "\(hoursInt)h"
+        } else if timeDifference < 86400 {
+            let hours = Int(timeDifference / 3600)
+            return "\(hours)h"
         } else {
-            let days = Int(hours / 86400)
+            let days = Int(timeDifference / 86400)
             return "\(days)d"
         }
     }

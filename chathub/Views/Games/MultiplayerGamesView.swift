@@ -1,4 +1,5 @@
 import SwiftUI
+import SDWebImageSwiftUI
 
 struct MultiplayerGamesView: View {
     @StateObject private var viewModel = MultiplayerGamesViewModel()
@@ -105,50 +106,28 @@ struct MultiplayerGameRow: View {
         HStack(spacing: 0) {
             // Game Icon section - matching GamesTabRowView 65dp size exactly
             ZStack {
-                AsyncImage(url: URL(string: game.GameIcon.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")) { phase in
-                    switch phase {
-                    case .empty:
-                        ProgressView()
-                            .frame(width: 65, height: 65)
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 65, height: 65)
-                            .clipShape(Circle())
-                            .overlay(
-                                Circle()
-                                    .stroke(AppTheme.shade2, lineWidth: 2)
-                            )
-                            .onAppear {
-                                AppLogger.log(tag: "LOG-APP: MultiplayerGamesView", message: "Game icon loaded for \(game.GameName)")
-                            }
-                    case .failure(let error):
-                        // Default game placeholder
-                        Image("grayImage")
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 65, height: 65)
-                            .clipShape(Circle())
-                            .overlay(
-                                Circle()
-                                    .stroke(AppTheme.shade2, lineWidth: 2)
-                            )
-                            .onAppear {
-                                AppLogger.log(tag: "LOG-APP: MultiplayerGamesView", message: "Game icon failed for \(game.GameName): \(error.localizedDescription)")
-                            }
-                    @unknown default:
-                        Image("grayImage")
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 65, height: 65)
-                            .clipShape(Circle())
-                            .overlay(
-                                Circle()
-                                    .stroke(AppTheme.shade2, lineWidth: 2)
-                            )
-                    }
+                WebImage(url: URL(string: game.GameIcon.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    ProgressView()
+                        .frame(width: 65, height: 65)
                 }
+                .onSuccess { image, data, cacheType in
+                    AppLogger.log(tag: "LOG-APP: MultiplayerGamesView", message: "Game icon loaded for \(game.GameName)")
+                }
+                .onFailure { error in
+                    AppLogger.log(tag: "LOG-APP: MultiplayerGamesView", message: "Game icon failed for \(game.GameName): \(error.localizedDescription)")
+                }
+                .indicator(.activity)
+                .transition(.opacity)
+                .frame(width: 65, height: 65)
+                .clipShape(Circle())
+                .overlay(
+                    Circle()
+                        .stroke(AppTheme.shade2, lineWidth: 2)
+                )
             }
             .frame(width: 65, height: 65)
             .padding(.leading, 15)
@@ -159,7 +138,7 @@ struct MultiplayerGameRow: View {
             VStack(alignment: .leading, spacing: 8) {
                 // Game Name - matching Android 16sp with theme colors
                 Text(game.GameName)
-                    .font(.system(size: 16, weight: .regular))
+                    .font(.system(size: 16, weight: .medium))
                     .foregroundColor(AppTheme.darkText)
                     .lineLimit(1)
                     .padding(.top, 18)
@@ -173,6 +152,7 @@ struct MultiplayerGameRow: View {
                     }
                 }
                 .padding(.top, 2)
+
                 
                 Spacer()
             }

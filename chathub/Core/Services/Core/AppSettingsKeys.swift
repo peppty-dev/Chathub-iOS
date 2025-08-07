@@ -2,30 +2,28 @@ import Foundation
 
 struct AppSettingsKeys {
     // App Version and Update Settings
-    static let liveAppVersion = "liveAppVersion"
+    static let liveAppVersion = "liveAppVersionCode" // normalized name used in Firebase
     static let isUpdateMandatory = "isUpdateMandatory"
     static let isMaintenanceMode = "isMaintenanceMode"
-    static let updateDetails = "updateDetails"
+    static let updateDetails = "updateMessage"
 
     // Feature Toggle Settings
-    static let areExtraFeaturesEnabled = "areExtraFeaturesEnabled"
+    // removed extra features flag
 
     // Direct Communication Settings
     static let isLiveEnabled = "isLiveEnabled"
 
     // Advertisement Settings
-    static let adIntervalSeconds = "adIntervalSeconds"
-    static let enableInFeedAds = "enableInFeedAds"
-    static let inFeedAdsCount = "inFeedAdsCount"
+    // removed ad-related keys
 
     // App Analytics and Rating Settings
     static let appActivityCountForRateUs = "appActivityCountForRateUs"
-    static let maxChatsForRateUsRequest = "maxChatsForRateUsRequest"
-    static let maxRateUsRequests = "maxRateUsRequests"
+    static let maxChatsForRateUsRequest = "minChatsBeforeRatePrompt"
+    static let maxRateUsRequests = "maxRatePrompts"
 
     // Monetization and Limits Settings
-    static let newUserFreePeriodSeconds = "newUserFreePeriodSeconds"
-    static let featureMonetizationPopUpCoolDownSeconds = "featureMonetizationPopUpCoolDownSeconds"
+    static let newUserFreePeriodSeconds = "freeTrialEndsAtSeconds"
+    static let featureMonetizationPopUpCoolDownSeconds = "featureMonetizationPopupCooldownSeconds"
 
     // Free User Message Limit Settings
     static let freeMessagesLimit = "freeMessagesLimit"
@@ -81,7 +79,7 @@ struct AppSettingsKeys {
 
     // New key for Android parity
     static let isAiChatEnabled = "isAiChatEnabled"
-    static let maxIdleSecondsForAiChatEnabling = "maxIdleSecondsForAiChatEnabling" // Android parity
-    static let minOfflineSecondsForAiChatEnabling = "minOfflineSecondsForAiChatEnabling" // Android parity
-    static let aiChatBotURL = "aiChatBotURL" // Android parity
+    static let maxIdleSecondsForAiChatEnabling = "aiChatEnableMaxIdleSeconds" // normalized
+    static let minOfflineSecondsForAiChatEnabling = "aiChatEnableMinOfflineSeconds" // normalized
+    static let aiChatBotURL = "aiChatbotUrl" // normalized
 } 

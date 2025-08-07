@@ -19,8 +19,7 @@ class AppSettingsSessionManager: ObservableObject {
 
     // MARK: - Keys for App Settings Only
     private enum Keys {
-        // Feature Control Keys
-        static let extraFeaturesEnabled = "EXTRA_FEATURES_ENABLED"
+        // Feature Control Keys (extra features removed)
         static let liveEnabled = "LIVEENABLED"
         static let liveAppVersion = "LIVEAPPVERSION"
         static let updateMandatory = "UPDATEMANDATORY"
@@ -77,10 +76,7 @@ class AppSettingsSessionManager: ObservableObject {
 
     // MARK: - Feature Control Properties
     
-    var extraFeaturesEnabled: Bool {
-        get { defaults.bool(forKey: Keys.extraFeaturesEnabled) }
-        set { defaults.set(newValue, forKey: Keys.extraFeaturesEnabled) }
-    }
+    // extraFeaturesEnabled removed
     
     var liveEnabled: Bool {
         get { defaults.bool(forKey: Keys.liveEnabled) }
@@ -129,12 +125,18 @@ class AppSettingsSessionManager: ObservableObject {
     }
     
     var maxChatsForRateUsRequest: Int {
-        get { defaults.integer(forKey: Keys.maxChatsForRateUsRequest) }
+        get { 
+            let value = defaults.integer(forKey: Keys.maxChatsForRateUsRequest)
+            return value > 0 ? value : 10  // Default to 10 messages
+        }
         set { defaults.set(newValue, forKey: Keys.maxChatsForRateUsRequest) }
     }
     
     var maxRateUsRequests: Int {
-        get { defaults.integer(forKey: Keys.maxRateUsRequests) }
+        get { 
+            let value = defaults.integer(forKey: Keys.maxRateUsRequests)
+            return value > 0 ? value : 2  // Default to 2 attempts
+        }
         set { defaults.set(newValue, forKey: Keys.maxRateUsRequests) }
     }
     
@@ -318,7 +320,7 @@ class AppSettingsSessionManager: ObservableObject {
     func isFeatureEnabled(_ feature: AppFeature) -> Bool {
         switch feature {
         case .extraFeatures:
-            return extraFeaturesEnabled
+            return false
         case .live:
             return liveEnabled
         case .aiChat:
@@ -382,7 +384,7 @@ class AppSettingsSessionManager: ObservableObject {
         AppLogger.log(tag: "LOG-APP: AppSettingsSessionManager", message: "resetToDefaults() - Resetting app settings to defaults")
         
         // Reset feature flags
-        extraFeaturesEnabled = false
+        // extra features removed
         liveEnabled = false
         updateMandatory = false
         maintenance = false
@@ -406,7 +408,7 @@ class AppSettingsSessionManager: ObservableObject {
     func clearAppSettings() {
         AppLogger.log(tag: "LOG-APP: AppSettingsSessionManager", message: "clearAppSettings() - Clearing all app settings")
         let keysToRemove = [
-            Keys.extraFeaturesEnabled,
+            // extra features key removed
             Keys.liveEnabled,
             Keys.liveAppVersion,
             Keys.updateMandatory,

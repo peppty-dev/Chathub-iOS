@@ -22,15 +22,7 @@ class MessagingSettingsSessionManager: ObservableObject {
 
     // MARK: - Keys for Messaging Settings Only
     private enum Keys {
-        // Free User Limits Keys
-        static let newUserFreePeriodSeconds = "new_user_free_period_ms"
-        static let freeMessagesLimit = "free_user_message_limit"
-        static let freeMessagesCooldownSeconds = "free_user_message_cooldown_minutes"
-
-        
-
-        
-        // Message Tracking Keys
+        // Message Tracking Keys (conversation-specific data)
         static let lastMessageReceivedTime = "lastMessageReceivedTime"
         static let freeMessageTime = "freeMessageTime"
         static let totalNoOfMessageReceived = "totalNoOfMessageReceived"
@@ -59,29 +51,7 @@ class MessagingSettingsSessionManager: ObservableObject {
         static let moveToInboxSelected = "moveToInboxSelected"
     }
 
-    // MARK: - Free User Limits Properties
-    
-    var newUserFreePeriodSeconds: TimeInterval {
-        get { defaults.double(forKey: Keys.newUserFreePeriodSeconds) }
-        set { defaults.set(newValue, forKey: Keys.newUserFreePeriodSeconds) }
-    }
-    
-    var freeMessagesLimit: Int {
-        get { defaults.integer(forKey: Keys.freeMessagesLimit) }
-        set { defaults.set(newValue, forKey: Keys.freeMessagesLimit) }
-    }
-    
-    var freeMessagesCooldownSeconds: TimeInterval {
-        get { defaults.double(forKey: Keys.freeMessagesCooldownSeconds) }
-        set { defaults.set(newValue, forKey: Keys.freeMessagesCooldownSeconds) }
-    }
-    
-
-    
-
-
-    
-    // MARK: - Message Tracking Properties
+        // MARK: - Message Tracking Properties (conversation-specific data)
     
     var lastMessageReceivedTime: TimeInterval {
         get { defaults.double(forKey: Keys.lastMessageReceivedTime) }
@@ -210,7 +180,12 @@ class MessagingSettingsSessionManager: ObservableObject {
         set { defaults.set(newValue, forKey: Keys.moveToInboxSelected) }
     }
     
-    // MARK: - Messaging Limit Management Methods
+    // MARK: - Global Message Counting (For Rating System Only)
+    
+    /// Global message counting - used ONLY for rating system triggers
+    /// These count total messages across ALL conversations
+    /// totalNoOfMessageSent: Global count of all sent messages  
+    /// totalNoOfMessageReceived: Global count of all received messages
     
     /// Check if user has active subscription
     func hasActiveSubscription() -> Bool {
@@ -240,7 +215,7 @@ class MessagingSettingsSessionManager: ObservableObject {
     /// Check if user is in free period
     func isInFreePeriod() -> Bool {
         let currentTime = Date().timeIntervalSince1970
-        let freePeriodEnd = newUserFreePeriodSeconds
+        let freePeriodEnd = TimeInterval(SessionManager.shared.newUserFreePeriodSeconds)
         return currentTime < freePeriodEnd
     }
     
@@ -258,7 +233,8 @@ class MessagingSettingsSessionManager: ObservableObject {
         
         // Check message limit and cooldown for free users
         let currentTime = Date().timeIntervalSince1970
-        let messagesCooldownEnd = freeMessageTime + freeMessagesCooldownSeconds
+        // Use SessionManager for limit configs (consistency with other limit features)
+        let messagesCooldownEnd = freeMessageTime + TimeInterval(SessionManager.shared.freeMessagesCooldownSeconds)
         
         if currentTime > messagesCooldownEnd {
             // Cooldown period has passed, reset message count
@@ -266,18 +242,19 @@ class MessagingSettingsSessionManager: ObservableObject {
             return true
         }
         
-        return totalNoOfMessageSent < freeMessagesLimit
+        return totalNoOfMessageSent < SessionManager.shared.freeMessagesLimit
     }
     
 
     
-    /// Increment message count
+    /// Increment GLOBAL message count (for rating system only)
+    /// This counts total messages across ALL conversations
     func incrementMessageCount() {
         totalNoOfMessageSent += 1
         if freeMessageTime == 0 {
             freeMessageTime = Date().timeIntervalSince1970
         }
-        AppLogger.log(tag: "LOG-APP: MessagingSettingsSessionManager", message: "incrementMessageCount() - Messages sent: \(totalNoOfMessageSent)")
+        AppLogger.log(tag: "LOG-APP: MessagingSettingsSessionManager", message: "incrementMessageCount() - GLOBAL Messages sent: \(totalNoOfMessageSent)")
         synchronize()
     }
     
@@ -299,7 +276,8 @@ class MessagingSettingsSessionManager: ObservableObject {
             return Int.max // Unlimited
         }
         
-        return max(0, freeMessagesLimit - totalNoOfMessageSent)
+        // Use SessionManager for limit configs (consistency with other limit features)
+        return max(0, SessionManager.shared.freeMessagesLimit - totalNoOfMessageSent)
     }
     
 
@@ -311,8 +289,53 @@ class MessagingSettingsSessionManager: ObservableObject {
         }
         
         let currentTime = Date().timeIntervalSince1970
-        let cooldownEnd = freeMessageTime + freeMessagesCooldownSeconds
+        // Use SessionManager for limit configs (consistency with other limit features)
+        let cooldownEnd = freeMessageTime + TimeInterval(SessionManager.shared.freeMessagesCooldownSeconds)
         return max(0, cooldownEnd - currentTime)
+    }
+    
+    // MARK: - Per-User Message Counting (For Message Limit Popup)
+    
+    /// Get message count for specific user (used for message limit popup)
+    func getMessageCount(otherUserId: String) -> Int {
+        let count = defaults.integer(forKey: "message_count_\(otherUserId)")
+        AppLogger.log(tag: "LOG-APP: MessagingSettingsSessionManager", message: "getMessageCount() User \(otherUserId) has sent \(count) messages")
+        return count
+    }
+    
+    /// Set message count for specific user (used for message limit popup)
+    func setMessageCount(otherUserId: String, count: Int) {
+        defaults.set(count, forKey: "message_count_\(otherUserId)")
+        AppLogger.log(tag: "LOG-APP: MessagingSettingsSessionManager", message: "setMessageCount() Set message count for user \(otherUserId): \(count)")
+        synchronize()
+    }
+    
+    /// Increment message count for specific user (used for message limit popup)
+    func incrementMessageCount(otherUserId: String) {
+        let currentCount = getMessageCount(otherUserId: otherUserId)
+        setMessageCount(otherUserId: otherUserId, count: currentCount + 1)
+        AppLogger.log(tag: "LOG-APP: MessagingSettingsSessionManager", message: "incrementMessageCount() Incremented count for user \(otherUserId): \(currentCount) -> \(currentCount + 1)")
+    }
+    
+    /// Get message limit cooldown start time for specific user
+    func getMessageLimitCooldownStartTime(otherUserId: String) -> Int64 {
+        let time = defaults.object(forKey: "message_limit_cooldown_start_time_\(otherUserId)") as? Int64 ?? 0
+        AppLogger.log(tag: "LOG-APP: MessagingSettingsSessionManager", message: "getMessageLimitCooldownStartTime() User \(otherUserId) cooldown start time: \(time)")
+        return time
+    }
+    
+    /// Set message limit cooldown start time for specific user
+    func setMessageLimitCooldownStartTime(otherUserId: String, time: Int64) {
+        defaults.set(time, forKey: "message_limit_cooldown_start_time_\(otherUserId)")
+        AppLogger.log(tag: "LOG-APP: MessagingSettingsSessionManager", message: "setMessageLimitCooldownStartTime() Set cooldown start time for user \(otherUserId): \(time)")
+        synchronize()
+    }
+    
+    /// Reset message limits for specific user (called when cooldown expires)
+    func resetMessageLimits(otherUserId: String) {
+        setMessageCount(otherUserId: otherUserId, count: 0)
+        setMessageLimitCooldownStartTime(otherUserId: otherUserId, time: 0)
+        AppLogger.log(tag: "LOG-APP: MessagingSettingsSessionManager", message: "resetMessageLimits() Reset limits for user \(otherUserId)")
     }
     
 
@@ -404,6 +427,10 @@ class MessagingSettingsSessionManager: ObservableObject {
         callSeconds += seconds
         liveSeconds += seconds
         AppLogger.log(tag: "LOG-APP: MessagingSettingsSessionManager", message: "addCallSeconds() - Total: \(callSeconds)")
+        
+        // Also update time allocations using TimeAllocationManager
+        TimeAllocationManager.shared.replenishCallSecondsIfNeeded()
+        
         synchronize()
     }
     

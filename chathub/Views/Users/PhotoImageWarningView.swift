@@ -21,9 +21,6 @@ struct PhotoImageWarningView: View {
         ZStack {
             Color.black.opacity(0.5)
                 .ignoresSafeArea()
-                .onTapGesture {
-                    onDismiss()
-                }
             
             VStack(spacing: 20) {
                 VStack(spacing: 8) {

@@ -89,11 +89,7 @@ class SessionManager: ObservableObject {
         static let updateMandatory = "UPDATEMANDATORY"
         static let maintenance = "MAINTENANCE"
         static let updateDetails = "UPDATE_DETAILS"
-        static let adIntervalSeconds = "AD_INTERVAL_SECONDS"
-        static let adIntervalSecondsWoman = "AD_INTERVAL_SECONDS_WOMAN"
-        static let enableInFeedAds = "ENABLE_IN_FEED_ADS"
-        static let inFeedAdsCount = "MREC_COUNT_IN_FEED"
-        static let inFeedAdsCountWoman = "inFeedAdsCountWoman"
+        // Removed ad-related keys
         static let appActivityCount = "APP_ACTIVITY_COUNT"
         static let maxChatsForRateUsRequest = "MAX_CHATS_FOR_RATEUS_REQUEST"
         static let maxRateUsRequests = "MAX_RATEUS_REQUESTS"
@@ -696,30 +692,7 @@ class SessionManager: ObservableObject {
     
     // MARK: - Advertisement Settings
     
-    var adIntervalSeconds: Int64 {
-        get { defaults.object(forKey: Keys.adIntervalSeconds) as? Int64 ?? 0 }
-        set { defaults.set(newValue, forKey: Keys.adIntervalSeconds) }
-    }
-    
-    var adIntervalSecondsWoman: Int64 {
-        get { defaults.object(forKey: Keys.adIntervalSecondsWoman) as? Int64 ?? 0 }
-        set { defaults.set(newValue, forKey: Keys.adIntervalSecondsWoman) }
-    }
-    
-    var enableInFeedAds: Bool {
-        get { defaults.bool(forKey: Keys.enableInFeedAds) }
-        set { defaults.set(newValue, forKey: Keys.enableInFeedAds) }
-    }
-    
-    var inFeedAdsCount: Int64 {
-        get { defaults.object(forKey: Keys.inFeedAdsCount) as? Int64 ?? 0 }
-        set { defaults.set(newValue, forKey: Keys.inFeedAdsCount) }
-    }
-    
-    var inFeedAdsCountWoman: Int64 {
-        get { defaults.object(forKey: Keys.inFeedAdsCountWoman) as? Int64 ?? 0 }
-        set { defaults.set(newValue, forKey: Keys.inFeedAdsCountWoman) }
-    }
+    // Removed ad-related properties
     
     // MARK: - App Analytics and Rating Settings
     
@@ -729,12 +702,12 @@ class SessionManager: ObservableObject {
     }
     
     var maxChatsForRateUsRequest: Int64 {
-        get { defaults.object(forKey: Keys.maxChatsForRateUsRequest) as? Int64 ?? 0 }
+        get { defaults.object(forKey: Keys.maxChatsForRateUsRequest) as? Int64 ?? 10 }
         set { defaults.set(newValue, forKey: Keys.maxChatsForRateUsRequest) }
     }
     
     var maxRateUsRequests: Int64 {
-        get { defaults.object(forKey: Keys.maxRateUsRequests) as? Int64 ?? 0 }
+        get { defaults.object(forKey: Keys.maxRateUsRequests) as? Int64 ?? 2 }
         set { defaults.set(newValue, forKey: Keys.maxRateUsRequests) }
     }
     
@@ -780,12 +753,20 @@ class SessionManager: ObservableObject {
     // MARK: - Free User Message Limit Settings
     
     var freeMessagesLimit: Int {
-        get { defaults.integer(forKey: Keys.freeMessagesLimit) }
+        get { 
+            let value = defaults.integer(forKey: Keys.freeMessagesLimit)
+            // Default to 1 free message
+            return value > 0 ? value : 1
+        }
         set { defaults.set(newValue, forKey: Keys.freeMessagesLimit) }
     }
     
     var freeMessagesCooldownSeconds: Int {
-        get { defaults.integer(forKey: Keys.freeMessagesCooldownSeconds) }
+        get { 
+            let value = defaults.integer(forKey: Keys.freeMessagesCooldownSeconds)
+            // Default to 1 minute (60 seconds)
+            return value > 0 ? value : 60
+        }
         set { defaults.set(newValue, forKey: Keys.freeMessagesCooldownSeconds) }
     }
     
@@ -794,8 +775,8 @@ class SessionManager: ObservableObject {
     var freeConversationsLimit: Int {
         get { 
             let value = defaults.integer(forKey: Keys.freeConversationsLimit)
-            // Default to 5 free conversations
-            return value > 0 ? value : 5
+            // Default to 1 free conversation
+            return value > 0 ? value : 1
         }
         set { defaults.set(newValue, forKey: Keys.freeConversationsLimit) }
     }
@@ -803,8 +784,8 @@ class SessionManager: ObservableObject {
     var freeConversationsCooldownSeconds: Int {
         get { 
             let value = defaults.integer(forKey: Keys.freeConversationsCooldownSeconds)
-            // Default to 5 minutes (300 seconds)
-            return value > 0 ? value : 300
+            // Default to 1 minute (60 seconds)
+            return value > 0 ? value : 60
         }
         set { defaults.set(newValue, forKey: Keys.freeConversationsCooldownSeconds) }
     }
@@ -824,7 +805,7 @@ class SessionManager: ObservableObject {
     var freeRefreshLimit: Int {
         get { 
             let value = defaults.integer(forKey: Keys.freeRefreshLimit)
-            return value > 0 ? value : 2 // Default to 2 refreshes
+            return value > 0 ? value : 1 // Default to 1 refresh
         }
         set { defaults.set(newValue, forKey: Keys.freeRefreshLimit) }
     }
@@ -832,7 +813,7 @@ class SessionManager: ObservableObject {
     var freeRefreshCooldownSeconds: TimeInterval {
         get { 
             let value = defaults.double(forKey: Keys.freeRefreshCooldownSeconds)
-            return value > 0 ? value : 120 // Default to 2 minutes
+            return value > 0 ? value : 60 // Default to 1 minute
         }
         set { defaults.set(newValue, forKey: Keys.freeRefreshCooldownSeconds) }
     }
@@ -852,7 +833,7 @@ class SessionManager: ObservableObject {
     var freeFilterLimit: Int {
         get { 
             let value = defaults.integer(forKey: Keys.freeFilterLimit)
-            return value > 0 ? value : 2 // Default to 2 filter applications (matches refresh)
+            return value > 0 ? value : 1 // Default to 1 filter application
         }
         set { defaults.set(newValue, forKey: Keys.freeFilterLimit) }
     }
@@ -860,7 +841,7 @@ class SessionManager: ObservableObject {
     var freeFilterCooldownSeconds: Int {
         get { 
             let value = defaults.integer(forKey: Keys.freeFilterCooldownSeconds)
-            return value > 0 ? value : 120 // Default to 2 minutes (matches refresh)
+            return value > 0 ? value : 60 // Default to 1 minute
         }
         set { defaults.set(newValue, forKey: Keys.freeFilterCooldownSeconds) }
     }
@@ -880,7 +861,7 @@ class SessionManager: ObservableObject {
     var freeSearchLimit: Int {
         get { 
             let value = defaults.integer(forKey: Keys.freeSearchLimit)
-            return value > 0 ? value : 2 // Default to 2 searches (matches refresh/filter)
+            return value > 0 ? value : 1 // Default to 1 search
         }
         set { defaults.set(newValue, forKey: Keys.freeSearchLimit) }
     }
@@ -914,7 +895,7 @@ class SessionManager: ObservableObject {
     var freeSearchCooldownSeconds: Int {
         get { 
             let value = defaults.integer(forKey: Keys.freeSearchCooldownSeconds)
-            return value > 0 ? value : 120 // Default to 2 minutes (matches refresh/filter)
+            return value > 0 ? value : 60 // Default to 1 minute
         }
         set { defaults.set(newValue, forKey: Keys.freeSearchCooldownSeconds) }
     }
@@ -1439,8 +1420,9 @@ class SessionManager: ObservableObject {
     func clearAllFilters() -> Bool {
         let filterKeys = [
             Keys.filterMinAge, Keys.filterMaxAge, Keys.filterGender,
-            Keys.filterCountry, Keys.filterLanguage, Keys.filterNearbyOnly,
-            Keys.onlineUsersRefreshTime
+            Keys.filterCountry, Keys.filterLanguage, Keys.filterNearbyOnly
+            // NOTE: Keys.onlineUsersRefreshTime is NOT cleared here - it should persist
+            // independently of filter changes to prevent unnecessary data reloading
         ]
         
         for key in filterKeys {
@@ -1618,22 +1600,80 @@ class SessionManager: ObservableObject {
     
     // MARK: - Message Limit Methods
     
+    @available(*, deprecated, message: "Use MessagingSettingsSessionManager.shared.getMessageLimitCooldownStartTime(otherUserId:) instead")
     func getMessageLimitCooldownStartTime(otherUserId: String) -> Int64 {
-        return defaults.object(forKey: "message_limit_cooldown_start_time_\(otherUserId)") as? Int64 ?? 0
+        return MessagingSettingsSessionManager.shared.getMessageLimitCooldownStartTime(otherUserId: otherUserId)
     }
     
+    @available(*, deprecated, message: "Use MessagingSettingsSessionManager.shared.setMessageLimitCooldownStartTime(otherUserId:time:) instead")
     func setMessageLimitCooldownStartTime(otherUserId: String, time: Int64) {
-        defaults.set(time, forKey: "message_limit_cooldown_start_time_\(otherUserId)")
-        synchronize()
+        MessagingSettingsSessionManager.shared.setMessageLimitCooldownStartTime(otherUserId: otherUserId, time: time)
     }
     
+    // MARK: - Two-Timestamp Message Filtering Strategy
+    
+    /// Gets the optimal timestamp for message sync using two-timestamp strategy
+    /// Compares fetch_message_after (conversation clear) and last_seen_timestamp
+    /// Returns the maximum (most recent) timestamp to minimize data fetching
+    func getOptimalMessageSyncTimestamp(otherUserId: String) -> Int64 {
+        let fetchMessageAfter = getChatFetchMessageAfter(otherUserId: otherUserId)
+        let lastSeenTimestamp = getLastSeenTimestamp(otherUserId: otherUserId)
+        
+        let optimalTimestamp = max(fetchMessageAfter, lastSeenTimestamp)
+        
+        AppLogger.log(tag: "LOG-APP: SessionManager", message: "getOptimalMessageSyncTimestamp() otherUserId: \(otherUserId), fetchMessageAfter: \(fetchMessageAfter), lastSeen: \(lastSeenTimestamp), optimal: \(optimalTimestamp)")
+        
+        return optimalTimestamp
+    }
+    
+    /// Gets the fetch_message_after timestamp for conversation clearing
+    func getChatFetchMessageAfter(otherUserId: String) -> Int64 {
+        return defaults.object(forKey: "fetch_message_after_\(otherUserId)") as? Int64 ?? 0
+    }
+    
+    /// Sets the fetch_message_after timestamp when conversation is cleared
+    func setChatFetchMessageAfter(otherUserId: String, timestamp: Int64) {
+        defaults.set(timestamp, forKey: "fetch_message_after_\(otherUserId)")
+        synchronize()
+        AppLogger.log(tag: "LOG-APP: SessionManager", message: "setChatFetchMessageAfter() Set for \(otherUserId): \(timestamp)")
+    }
+    
+    /// Gets the last seen timestamp for read status optimization
+    func getLastSeenTimestamp(otherUserId: String) -> Int64 {
+        return defaults.object(forKey: "last_seen_timestamp_\(otherUserId)") as? Int64 ?? 0
+    }
+    
+    /// Sets the last seen timestamp when user views messages
+    func setLastSeenTimestamp(otherUserId: String, timestamp: Int64) {
+        defaults.set(timestamp, forKey: "last_seen_timestamp_\(otherUserId)")
+        synchronize()
+        AppLogger.log(tag: "LOG-APP: SessionManager", message: "setLastSeenTimestamp() Updated last seen for \(otherUserId): \(timestamp)")
+    }
+    
+    /// Updates last seen timestamp only if new timestamp is more recent
+    /// Used when processing new messages to track read status
+    func updateLastSeenToLatestMessage(otherUserId: String, messageTimestamp: Int64) {
+        let currentLastSeen = getLastSeenTimestamp(otherUserId: otherUserId)
+        
+        // Only update if this message is newer than what we've seen
+        if messageTimestamp > currentLastSeen {
+            setLastSeenTimestamp(otherUserId: otherUserId, timestamp: messageTimestamp)
+            AppLogger.log(tag: "LOG-APP: SessionManager", message: "updateLastSeenToLatestMessage() Advanced last seen for \(otherUserId): \(currentLastSeen) → \(messageTimestamp)")
+        }
+    }
+    
+    // MARK: - DEPRECATED: Per-user message counting moved to MessagingSettingsSessionManager
+    // These methods are kept for backward compatibility but should not be used
+    // Use MessagingSettingsSessionManager.shared.getMessageCount(otherUserId:) instead
+    
+    @available(*, deprecated, message: "Use MessagingSettingsSessionManager.shared.getMessageCount(otherUserId:) instead")
     func getMessageCount(otherUserId: String) -> Int {
-        return defaults.integer(forKey: "message_count_\(otherUserId)")
+        return MessagingSettingsSessionManager.shared.getMessageCount(otherUserId: otherUserId)
     }
     
+    @available(*, deprecated, message: "Use MessagingSettingsSessionManager.shared.setMessageCount(otherUserId:count:) instead")
     func setMessageCount(otherUserId: String, count: Int) {
-        defaults.set(count, forKey: "message_count_\(otherUserId)")
-        synchronize()
+        MessagingSettingsSessionManager.shared.setMessageCount(otherUserId: otherUserId, count: count)
     }
     
     // MARK: - Notification Methods (Android Parity)

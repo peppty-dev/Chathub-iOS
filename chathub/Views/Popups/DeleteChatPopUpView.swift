@@ -12,7 +12,7 @@ struct DeleteChatPopUpView: View {
     var body: some View {
         ZStack {
             // Background overlay - dark semi-transparent tap to dismiss (following guidelines)
-            Color.black.opacity(0.4)
+            Color.black.opacity(0.6)
                 .ignoresSafeArea()
                 .onTapGesture {
                     AppLogger.log(tag: "LOG-APP: DeleteChatPopUpView", message: "backgroundTapped() Dismissing popup")

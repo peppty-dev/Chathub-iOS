@@ -33,13 +33,17 @@ class ModerationManagerService {
         let currentTime = Int64(Date().timeIntervalSince1970)
         let coolDownTime = moderationSettingsSessionManager.textModerationIssueCoolDownTime
         
-        // ANDROID PARITY: Check if cooldown period (1 hour = 3600 seconds) has passed
-        if (coolDownTime + 3600) < currentTime {
+        // Use remote-configured SB duration (fallback to 3600 seconds)
+        let sbDurationSeconds = Int64(SessionManager.shared.defaults.integer(forKey: "TEXT_MODERATION_SB_LOCK_DURATION_SECONDS"))
+        let effectiveDuration = sbDurationSeconds > 0 ? sbDurationSeconds : 3600
+
+        // Check if cooldown period has passed
+        if (coolDownTime + effectiveDuration) < currentTime {
             let moderationScore = moderationSettingsSessionManager.hiveTextModerationScore
             
             AppLogger.log(tag: "LOG-APP: ModerationManagerService", message: "checkTextModerationRestrictions() cooldown expired, checking score: \(moderationScore)")
             
-            // ANDROID PARITY: If score > 100, apply restrictions for 1 hour
+            // If score > 100, apply restrictions for configured duration
             if moderationScore > 100 {
                 AppLogger.log(tag: "LOG-APP: ModerationManagerService", message: "checkTextModerationRestrictions() applying text moderation restrictions")
                 

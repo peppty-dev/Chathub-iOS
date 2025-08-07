@@ -522,8 +522,9 @@ class UserSessionManager: ObservableObject {
     func clearAllFilters() -> Bool {
         let filterKeys = [
             Keys.filterMinAge, Keys.filterMaxAge, Keys.filterGender,
-            Keys.filterCountry, Keys.filterLanguage, Keys.filterNearbyOnly,
-            Keys.onlineUsersRefreshTime
+            Keys.filterCountry, Keys.filterLanguage, Keys.filterNearbyOnly
+            // NOTE: Keys.onlineUsersRefreshTime is NOT cleared here - it should persist
+            // independently of filter changes to prevent unnecessary data reloading
         ]
         
         for key in filterKeys {

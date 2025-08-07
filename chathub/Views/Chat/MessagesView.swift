@@ -82,6 +82,10 @@ struct MessagesView: View {
     @State private var showNotificationPermissionPopup: Bool = false
     @State private var hasShownNotificationPopup: Bool = false
     
+    // MARK: - Message Limit State
+    @State private var showMessageLimitPopup = false
+    @State private var messageLimitResult: FeatureLimitResult?
+    
     // Message pagination
     @State private var fetchAfter: String = ""
     @State private var isLoadingMore: Bool = false
@@ -573,207 +577,341 @@ struct MessagesView: View {
         .opacity(canSendMessage ? 1.0 : 0.7)
     }
 
-    var body: some View {
-        ZStack {
-            VStack(spacing: 0) {
-                ongoingCallView
-                liveOverlayView
-                messagesScrollView
-                messageInputView
+    // MARK: - Popup Overlays
+    
+    @ViewBuilder
+    private var popupOverlays: some View {
+        // Voice Call popup overlay (Android Parity)
+        if showVoiceCallPopup {
+            VoiceCallPopupView(
+                isPresented: $showVoiceCallPopup,
+                onSubscribe: { navigateToSubscription() }
+            )
+        }
+        
+        // Video Call popup overlay (Android Parity)
+        if showVideoCallPopup {
+            VideoCallPopupView(
+                isPresented: $showVideoCallPopup,
+                onSubscribe: { navigateToSubscription() }
+            )
+        }
+        
+        // Live Call popup overlay (Android Parity)
+        if showLiveCallPopup {
+            LiveCallPopupView(
+                isPresented: $showLiveCallPopup,
+                onSubscribe: { navigateToSubscription() }
+            )
+        }
+    }
+    
+    @ViewBuilder
+    private var toastOverlays: some View {
+        // Toast overlay
+        if showToast {
+            VStack {
+                Spacer()
+                Text(toastMessage)
+                    .font(.system(size: 14))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.black.opacity(0.8))
+                    .cornerRadius(8)
+                    .padding(.bottom, 100)
             }
-            .animation(.easeInOut(duration: 0.3), value: isLiveOn)
-            
-            // Voice Call popup overlay (Android Parity)
-            if showVoiceCallPopup {
-                VoiceCallPopupView(
-                    isPresented: $showVoiceCallPopup,
-                    onSubscribe: { navigateToSubscription() }
-                )
-            }
-            
-            // Video Call popup overlay (Android Parity)
-            if showVideoCallPopup {
-                VideoCallPopupView(
-                    isPresented: $showVideoCallPopup,
-                    onSubscribe: { navigateToSubscription() }
-                )
-            }
-            
-            // Direct Voice Call popup overlay (Android Parity) - REMOVED
-            // DirectVoiceCallPopupView has been removed, direct navigation to subscription instead
-            
-            // Live Call popup overlay (Android Parity)
-            if showLiveCallPopup {
-                LiveCallPopupView(
-                    isPresented: $showLiveCallPopup,
-                    onSubscribe: { navigateToSubscription() }
-                )
-            }
-            
-            // Toast overlay
-            if showToast {
-                VStack {
-                    Spacer()
-                    Text(toastMessage)
-                        .font(.system(size: 14))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.8))
-                        .cornerRadius(8)
-                        .padding(.bottom, 100)
-                }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .onAppear {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                        withAnimation {
-                            showToast = false
-                        }
-                    }
-                }
-            }
-            
-            // Busy toast overlay
-            if showBusyToast {
-                VStack {
-                    Spacer()
-                    Text("User is busy in another call")
-                        .font(.system(size: 14))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.8))
-                        .cornerRadius(8)
-                        .padding(.bottom, 100)
-                }
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .onAppear {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
-                        withAnimation {
-                            showBusyToast = false
-                        }
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    withAnimation {
+                        showToast = false
                     }
                 }
             }
         }
-        .overlay(
-            // ANDROID PARITY: Rating dialog overlay (matches Android SubmitRating dialog)
-            Group {
-                if RatingService.shared.showRatingDialog {
-                    RatingDialogOverlayView()
-                }
-                
-                // MARK: - Notification Permission Popup Overlay (Contextual Request)
-                if showNotificationPermissionPopup {
-                    AppNotificationPermissionPopupView(
-                        isPresented: $showNotificationPermissionPopup,
-                        onAllow: {
-                            AppLogger.log(tag: "LOG-APP: MessagesView", message: "notificationPermissionPopup onAllow() User agreed to allow notifications")
-                            
-                            // Handle both first-time and retry scenarios
-                            if AppNotificationPermissionService.shared.shouldShowRetryPopup() {
-                                // This is a retry scenario
-                                AppNotificationPermissionService.shared.requestRetryPermission(
-                                    context: "after_message_engagement"
-                                ) { granted in
-                                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "notificationPermissionPopup retry iOS permission result: \(granted)")
-                                    showNotificationPermissionPopup = false
-                                    
-                                    if granted {
-                                        // Reset retry mechanism on success
-                                        AppNotificationPermissionService.shared.resetRetryMechanism()
-                                    }
-                                }
-                            } else {
-                                // First-time request - Use FCMTokenUpdateService for contextual token update
-                                FCMTokenUpdateService.shared.requestPermissionAndUpdateToken(
-                                    context: "after_first_message"
-                                ) { success in
-                                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "notificationPermissionPopup FCM token update result: \(success)")
-                                    showNotificationPermissionPopup = false
-                                    
-                                    if success {
-                                        // Reset retry mechanism on success
-                                        AppNotificationPermissionService.shared.resetRetryMechanism()
-                                        AppLogger.log(tag: "LOG-APP: MessagesView", message: "notificationPermissionPopup FCM token updated successfully")
-                                    } else {
-                                        AppLogger.log(tag: "LOG-APP: MessagesView", message: "notificationPermissionPopup FCM token update failed, but user can continue chatting")
-                                    }
-                                }
-                            }
-                        },
-                        onMaybeLater: {
-                            AppLogger.log(tag: "LOG-APP: MessagesView", message: "notificationPermissionPopup onMaybeLater() User chose maybe later")
-                            
-                            // Handle "maybe later" with retry mechanism
-                            AppNotificationPermissionService.shared.handleMaybeLaterResponse(context: "after_first_message")
-                            
-                            showNotificationPermissionPopup = false
-                            hasShownNotificationPopup = true // Mark as shown to prevent showing again in this session
-                        }
-                    )
-                    .zIndex(1000) // Ensure it appears above all other content
-                }
-                
-                // MARK: - Interests Popup Overlay (Android Parity)
-                if showInterestsPopup {
-                    InterestsPopupView(isPresented: $showInterestsPopup)
-                        .zIndex(999) // Ensure it appears above content but below notification popup
+        
+        // Busy toast overlay
+        if showBusyToast {
+            VStack {
+                Spacer()
+                Text("User is busy in another call")
+                    .font(.system(size: 14))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(Color.black.opacity(0.8))
+                    .cornerRadius(8)
+                    .padding(.bottom, 100)
+            }
+            .transition(.move(edge: .bottom).combined(with: .opacity))
+            .onAppear {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    withAnimation {
+                        showBusyToast = false
+                    }
                 }
             }
-        )
+        }
+    }
+    
+    @ViewBuilder
+    private var mainContent: some View {
+        VStack(spacing: 0) {
+            ongoingCallView
+            liveOverlayView
+            messagesScrollView
+            messageInputView
+        }
+        .animation(.easeInOut(duration: 0.3), value: isLiveOn)
+    }
+
+    @ViewBuilder
+    private var overlayViews: some View {
+        Group {
+            // Rating popup removed from MessagesView - now shown in MainView when returning
+            
+            // MARK: - Notification Permission Popup Overlay (Contextual Request)
+            if showNotificationPermissionPopup {
+                AppNotificationPermissionPopupView(
+                    isPresented: $showNotificationPermissionPopup,
+                    onAllow: {
+                        AppLogger.log(tag: "LOG-APP: MessagesView", message: "notificationPermissionPopup onAllow() User agreed to allow notifications")
+                        
+                        // Handle both first-time and retry scenarios
+                        if AppNotificationPermissionService.shared.shouldShowRetryPopup() {
+                            // This is a retry scenario
+                            AppNotificationPermissionService.shared.requestRetryPermission(
+                                context: "after_message_engagement"
+                            ) { granted in
+                                AppLogger.log(tag: "LOG-APP: MessagesView", message: "notificationPermissionPopup retry iOS permission result: \(granted)")
+                                showNotificationPermissionPopup = false
+                                
+                                if granted {
+                                    // Reset retry mechanism on success
+                                    AppNotificationPermissionService.shared.resetRetryMechanism()
+                                }
+                            }
+                        } else {
+                            // First-time request - Use FCMTokenUpdateService for contextual token update
+                            FCMTokenUpdateService.shared.requestPermissionAndUpdateToken(
+                                context: "after_first_message"
+                            ) { success in
+                                AppLogger.log(tag: "LOG-APP: MessagesView", message: "notificationPermissionPopup FCM token update result: \(success)")
+                                showNotificationPermissionPopup = false
+                                
+                                if success {
+                                    // Reset retry mechanism on success
+                                    AppNotificationPermissionService.shared.resetRetryMechanism()
+                                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "notificationPermissionPopup FCM token updated successfully")
+                                } else {
+                                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "notificationPermissionPopup FCM token update failed, but user can continue chatting")
+                                }
+                            }
+                        }
+                    },
+                    onMaybeLater: {
+                        AppLogger.log(tag: "LOG-APP: MessagesView", message: "notificationPermissionPopup onMaybeLater() User chose maybe later")
+                        
+                        // Handle "maybe later" with retry mechanism
+                        AppNotificationPermissionService.shared.handleMaybeLaterResponse(context: "after_first_message")
+                        
+                        showNotificationPermissionPopup = false
+                        hasShownNotificationPopup = true // Mark as shown to prevent showing again in this session
+                    }
+                )
+                .zIndex(1000) // Ensure it appears above all other content
+            }
+            
+            // MARK: - Interests Popup Overlay (Android Parity)
+            if showInterestsPopup {
+                InterestsPopupView(isPresented: $showInterestsPopup)
+                    .zIndex(999) // Ensure it appears above content but below notification popup
+            }
+            
+            // MARK: - Message Limit Popup Overlay
+            if showMessageLimitPopup, let result = messageLimitResult {
+                MessageLimitPopupView(
+                    isPresented: $showMessageLimitPopup,
+                    remainingCooldown: result.remainingCooldown,
+                    isLimitReached: result.currentUsage >= result.limit,
+                    currentUsage: result.currentUsage,
+                    limit: result.limit,
+                    onUpgradeToPremium: { 
+                        AppLogger.log(tag: "LOG-APP: MessagesView", message: "MessageLimitPopup navigating to subscription")
+                        navigateToSubscription() 
+                    }
+                )
+                .zIndex(998) // Below notification popup but above other content
+            }
+        }
+    }
+
+    @ToolbarContentBuilder
+    private func toolbarContent() -> some ToolbarContent {
+        // Username positioned next to back button - clickable to open profile
+        ToolbarItem(placement: .navigationBarLeading) {
+            Button(action: {
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "username tapped - navigating to profile for user: \(otherUser.name)")
+                showUserProfile = true
+            }) {
+                HStack(spacing: 8) {
+                    Text(isAIChat ? "\(otherUser.name)." : otherUser.name)
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundColor(Color("dark"))
+                }
+            }
+            .buttonStyle(PlainButtonStyle())
+        }
+        
+        // Voice call button (Android Parity Implementation)
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Button(action: { handleVoiceCallButtonTap() }) {
+                Image(systemName: "phone.fill")
+                    .font(.system(size: 18))
+                    .foregroundColor(Color("ColorAccent"))
+            }
+        }
+        
+        // Video call button (Android Parity Implementation)
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Button(action: { handleVideoCallButtonTap() }) {
+                Image(systemName: "video.fill")
+                    .font(.system(size: 18))
+                    .foregroundColor(Color("ColorAccent"))
+            }
+        }
+        
+        // Info/options button
+        ToolbarItem(placement: .navigationBarTrailing) {
+            Button(action: {
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "info button tapped - navigating to profile options")
+                showProfileOptions = true
+            }) {
+                Image(systemName: "info.circle.fill")
+                    .font(.system(size: 18))
+                    .foregroundColor(Color("ColorAccent"))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var navigationLinks: some View {
+        VStack {
+            NavigationLink(
+                destination: ProfileView(otherUserId: otherUser.id),
+                isActive: $showUserProfile
+            ) {
+                EmptyView()
+            }
+            .hidden()
+            
+            NavigationLink(
+                destination: ProfileOptionsView(
+                    otherUserId: otherUser.id,
+                    otherUserName: otherUser.name,
+                    otherUserDevId: otherUser.deviceId,
+                    otherUserGender: otherUser.gender,
+                    chatId: chatId,
+                    onConversationCleared: {
+                        AppLogger.log(tag: "LOG-APP: MessagesView", message: "ProfileOptionsView onConversationCleared() - conversation cleared, dismissing MessagesView")
+                        // Dismiss MessagesView and go back to previous view (ChatsTabView or ProfileView)
+                        DispatchQueue.main.async {
+                            self.onDismiss?()
+                        }
+                    }
+                ),
+                isActive: $showProfileOptions
+            ) {
+                EmptyView()
+            }
+            .hidden()
+            
+            NavigationLink(
+                destination: InfiniteXOGameView(
+                    chatId: chatId,
+                    currentUserId: currentUserId,
+                    currentUserName: currentUserName,
+                    otherUserId: otherUser.id,
+                    otherUserName: otherUser.name
+                ),
+                isActive: $navigateToInfiniteXOGame
+            ) {
+                EmptyView()
+            }
+            .hidden()
+            
+            NavigationLink(
+                destination: MakeVideoCallView(
+                    otherUserId: otherUser.id,
+                    otherUserName: otherUser.name,
+                    otherUserProfileImage: otherUser.profileImage,
+                    chatId: chatId
+                ),
+                isActive: $showVideoCall
+            ) {
+                EmptyView()
+            }
+            .hidden()
+            
+            NavigationLink(
+                destination: MakeAudioCallView(
+                    otherUserId: otherUser.id,
+                    otherUserName: otherUser.name,
+                    otherUserProfileImage: otherUser.profileImage,
+                    otherUserGender: otherUser.gender,
+                    chatId: chatId
+                ),
+                isActive: $showAudioCall
+            ) {
+                EmptyView()
+            }
+            .hidden()
+            
+            NavigationLink(
+                destination: SubscriptionView(),
+                isActive: $showSubscriptionView
+            ) {
+                EmptyView()
+            }
+            .hidden()
+            
+            NavigationLink(
+                destination: PhotoViewerView(
+                    imageUrl: fullScreenImageURL,
+                    imageUserId: otherUser.id,
+                    imageType: "chat_image"
+                ),
+                isActive: $showFullScreenImage
+            ) {
+                EmptyView()
+            }
+            .hidden()
+            
+            NavigationLink(
+                destination: FeedbackView(),
+                isActive: Binding<Bool>(
+                    get: { RatingService.shared.navigateToFeedback },
+                    set: { _ in RatingService.shared.navigateToFeedback = false }
+                )
+            ) {
+                EmptyView()
+            }
+            .hidden()
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            mainContent
+            popupOverlays
+            toastOverlays
+        }
+        .overlay(overlayViews)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(false)
-        .toolbar {
-            // Username positioned next to back button - clickable to open profile
-            ToolbarItem(placement: .navigationBarLeading) {
-                Button(action: {
-                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "username tapped - navigating to profile for user: \(otherUser.name)")
-                    showUserProfile = true
-                }) {
-                    HStack(spacing: 8) {
-                        Text(isAIChat ? "\(otherUser.name)." : otherUser.name)
-                            .font(.system(size: 18, weight: .semibold))
-                            .foregroundColor(Color("dark"))
-                    }
-                }
-                .buttonStyle(PlainButtonStyle())
-            }
-            
-            // Voice call button (Android Parity Implementation)
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: { handleVoiceCallButtonTap() }) {
-                    Image(systemName: "phone.fill")
-                        .font(.system(size: 18))
-                        .foregroundColor(Color("ColorAccent"))
-                }
-            }
-            
-            // Video call button (Android Parity Implementation)
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: { handleVideoCallButtonTap() }) {
-                    Image(systemName: "video.fill")
-                        .font(.system(size: 18))
-                        .foregroundColor(Color("ColorAccent"))
-                }
-            }
-            
-            // Info/options button
-            ToolbarItem(placement: .navigationBarTrailing) {
-                Button(action: {
-                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "info button tapped - navigating to profile options")
-                    showProfileOptions = true
-                }) {
-                    Image(systemName: "info.circle.fill")
-                        .font(.system(size: 18))
-                        .foregroundColor(Color("ColorAccent"))
-                }
-            }
-        }
-
-        
-        // Permission dialogs matching Android
+        .toolbar { toolbarContent() }
         .alert("Permission Required", isPresented: $showPermissionDialog) {
             Button("Cancel", role: .cancel) { }
             Button("Give Permission") {
@@ -788,193 +926,96 @@ struct MessagesView: View {
                 self.showImagePicker = false
             }
         }
-
-        .background(
-            VStack {
-                NavigationLink(
-                    destination: ProfileView(otherUserId: otherUser.id),
-                    isActive: $showUserProfile
-                ) {
-                    EmptyView()
-                }
-                .hidden()
-                
-                NavigationLink(
-                    destination: ProfileOptionsView(
-                        otherUserId: otherUser.id,
-                        otherUserName: otherUser.name,
-                        otherUserDevId: otherUser.deviceId,
-                        otherUserGender: otherUser.gender,
-                        chatId: chatId,
-                        onConversationCleared: {
-                            AppLogger.log(tag: "LOG-APP: MessagesView", message: "ProfileOptionsView onConversationCleared() - conversation cleared, dismissing MessagesView")
-                            // Dismiss MessagesView and go back to previous view (ChatsTabView or ProfileView)
-                            DispatchQueue.main.async {
-                                self.onDismiss?()
-                            }
-                        }
-                    ),
-                    isActive: $showProfileOptions
-                ) {
-                    EmptyView()
-                }
-                .hidden()
-                
-                NavigationLink(
-                    destination: InfiniteXOGameView(
-                        chatId: chatId,
-                        currentUserId: currentUserId,
-                        currentUserName: currentUserName,
-                        otherUserId: otherUser.id,
-                        otherUserName: otherUser.name
-                    ),
-                    isActive: $navigateToInfiniteXOGame
-                ) {
-                    EmptyView()
-                }
-                .hidden()
-                
-                NavigationLink(
-                    destination: MakeVideoCallView(
-                        otherUserId: otherUser.id,
-                        otherUserName: otherUser.name,
-                        otherUserProfileImage: otherUser.profileImage,
-                        chatId: chatId
-                    ),
-                    isActive: $showVideoCall
-                ) {
-                    EmptyView()
-                }
-                .hidden()
-                
-                NavigationLink(
-                    destination: MakeAudioCallView(
-                        otherUserId: otherUser.id,
-                        otherUserName: otherUser.name,
-                        otherUserProfileImage: otherUser.profileImage,
-                        chatId: chatId
-                    ),
-                    isActive: $showAudioCall
-                ) {
-                    EmptyView()
-                }
-                .hidden()
-                
-                NavigationLink(
-                    destination: SubscriptionView(),
-                    isActive: $showSubscriptionView
-                ) {
-                    EmptyView()
-                }
-                .hidden()
-                
-                NavigationLink(
-                    destination: PhotoViewerView(
-                        imageUrl: fullScreenImageURL,
-                        imageUserId: otherUser.id,
-                        imageType: "chat_image"
-                    ),
-                    isActive: $showFullScreenImage
-                ) {
-                    EmptyView()
-                }
-                .hidden()
-                
-                NavigationLink(
-                    destination: FeedbackView(),
-                    isActive: Binding<Bool>(
-                        get: { RatingService.shared.navigateToFeedback },
-                        set: { _ in RatingService.shared.navigateToFeedback = false }
-                    )
-                ) {
-                    EmptyView()
-                }
-                .hidden()
-            }
-        )
+        .background(navigationLinks)
         .task {
             await setupView()
         }
-        .onAppear {
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "MessagesView onAppear() - ensuring scroll to bottom for latest messages")
-            
-            // Reset dismissal flags
-            isViewBeingDismissed = false
-            hasFullyAppeared = false
-            
-            // Initialize text input height to calculated single line height (Progressive Growth Pattern)
-            textHeight = calculateTextHeight(for: "")
-            
-                    // ANDROID PARITY: Ensure status is visible immediately like live button
+        .onAppear(perform: handleViewAppear)
+        .onDisappear(perform: handleViewDisappear)
+    }
+    
+    // MARK: - Lifecycle Methods
+    
+    private func handleViewAppear() {
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "MessagesView onAppear() - ensuring scroll to bottom for latest messages")
+        
+        // Reset dismissal flags
+        isViewBeingDismissed = false
+        hasFullyAppeared = false
+        
+        // Initialize text input height to calculated single line height (Progressive Growth Pattern)
+        textHeight = calculateTextHeight(for: "")
+        
+        // ANDROID PARITY: Ensure status is visible immediately like live button
         if currentUserStatus.isEmpty || currentUserStatus == "Connecting..." || currentUserStatus == "    " {
             setInitialStatus()
         }
-            
-            // ANDROID PARITY: Load move to inbox flag from user profile
-            loadMoveToInboxFlag()
-            
-            // Set flag to indicate view has fully appeared after a delay
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                hasFullyAppeared = true
-                AppLogger.log(tag: "LOG-APP: MessagesView", message: "MessagesView onAppear() - hasFullyAppeared set to true")
-            }
-            
-            // Ensure scroll to bottom after a short delay to allow UI to settle
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                if !messages.isEmpty {
-                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "MessagesView onAppear() - triggering scroll to bottom with \(messages.count) messages")
-                }
-            }
-            
-            // MARK: - Time-based Interests Popup Trigger (Android Parity)
-            // Show interests popup every hour like Android MessageTextActivity.onResume()
-            checkTimeBasedInterestsPopup()
-        }
-        .onDisappear {
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() called - hasFullyAppeared: \(hasFullyAppeared), isViewBeingDismissed: \(isViewBeingDismissed)")
-            
-            // Prevent immediate cleanup if view hasn't fully appeared yet
-            guard hasFullyAppeared else {
-                AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() View hasn't fully appeared yet, skipping cleanup")
-                return
-            }
-            
-            // A sheet or navigation link is being presented, don't clean up.
-            // This is a workaround for an issue where presenting a sheet/link causes the view to be popped.
-            if showImagePicker || showUserProfile || showProfileOptions || navigateToInfiniteXOGame || 
-               showVideoCall || showAudioCall || showSubscriptionView || showFullScreenImage {
-                AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() Sheet/popup is active, skipping cleanup")
-                return
-            }
-            
-            // Prevent multiple cleanup calls
-            guard !isViewBeingDismissed else {
-                AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() Already being dismissed, skipping cleanup")
-                return
-            }
-            
-            isViewBeingDismissed = true
         
-            // Otherwise, the view is likely being popped.
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() Performing cleanup and dismissal")
-            cleanupView()
-            
-            // Only call onDismiss if we have a dismiss callback AND the view has fully appeared
-            // This prevents premature dismissal callbacks that cause navigation issues
-            if onDismiss != nil && hasFullyAppeared {
-                AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() Calling onDismiss callback")
-                DispatchQueue.main.async {
-                    onDismiss?()
-                }
-            } else {
-                AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() Skipping onDismiss - hasFullyAppeared: \(hasFullyAppeared), onDismiss: \(onDismiss != nil)")
-            }
-            
-            // ANDROID PARITY: Check and show rating dialog when returning from message activity
-            // This matches Android MainActivity.onActivityResult() for MESSAGE_TEXT_ACTIVITY_REQUEST_CODE
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() Checking rating conditions after message activity")
-            RatingService.shared.checkAndShowRatingDialogIfNeeded()
+        // ANDROID PARITY: Load move to inbox flag from user profile
+        loadMoveToInboxFlag()
+        
+        // Set flag to indicate view has fully appeared after a delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            hasFullyAppeared = true
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "MessagesView onAppear() - hasFullyAppeared set to true")
         }
+        
+        // Ensure scroll to bottom after a short delay to allow UI to settle
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            if !messages.isEmpty {
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "MessagesView onAppear() - triggering scroll to bottom with \(messages.count) messages")
+            }
+        }
+        
+        // MARK: - Time-based Interests Popup Trigger (Android Parity)
+        // Show interests popup every hour like Android MessageTextActivity.onResume()
+        checkTimeBasedInterestsPopup()
+    }
+    
+    private func handleViewDisappear() {
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() called - hasFullyAppeared: \(hasFullyAppeared), isViewBeingDismissed: \(isViewBeingDismissed)")
+        
+        // Prevent immediate cleanup if view hasn't fully appeared yet
+        guard hasFullyAppeared else {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() View hasn't fully appeared yet, skipping cleanup")
+            return
+        }
+        
+        // A sheet or navigation link is being presented, don't clean up.
+        // This is a workaround for an issue where presenting a sheet/link causes the view to be popped.
+        if showImagePicker || showUserProfile || showProfileOptions || navigateToInfiniteXOGame ||
+           showVideoCall || showAudioCall || showSubscriptionView || showFullScreenImage {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() Sheet/popup is active, skipping cleanup")
+            return
+        }
+        
+        // Prevent multiple cleanup calls
+        guard !isViewBeingDismissed else {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() Already being dismissed, skipping cleanup")
+            return
+        }
+        
+        isViewBeingDismissed = true
+    
+        // Otherwise, the view is likely being popped.
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() Performing cleanup and dismissal")
+        cleanupView()
+        
+        // Only call onDismiss if we have a dismiss callback AND the view has fully appeared
+        // This prevents premature dismissal callbacks that cause navigation issues
+        if onDismiss != nil && hasFullyAppeared {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() Calling onDismiss callback")
+            DispatchQueue.main.async {
+                onDismiss?()
+            }
+        } else {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() Skipping onDismiss - hasFullyAppeared: \(hasFullyAppeared), onDismiss: \(onDismiss != nil)")
+        }
+        
+        // ANDROID PARITY: Check and show rating dialog when returning from message activity
+        // This matches Android MainActivity.onActivityResult() for MESSAGE_TEXT_ACTIVITY_REQUEST_CODE
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() Checking rating conditions after message activity")
+        RatingService.shared.checkAndShowRatingDialogIfNeeded()
     }
     
     // MARK: - Call Button Handlers (Android Parity)
@@ -1607,8 +1648,73 @@ struct MessagesView: View {
         
         AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleSendMessage() Attempting to send message")
         
-        // Simplified message sending without ad checks
-        sendMessage()
+        // MARK: - Message Limit Check
+        // Set the current user ID for per-user message tracking
+        MessageLimitManager.shared.setCurrentUserId(otherUser.id)
+        
+        // Log subscription status for debugging message limit issues
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleSendMessage() DEBUG - Subscription Status:")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "  - Has Pro Access: \(SubscriptionSessionManager.shared.hasProAccess())")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "  - Subscription Tier: \(SubscriptionSessionManager.shared.getSubscriptionTier())")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "  - Is Subscription Active: \(SubscriptionSessionManager.shared.isSubscriptionActive())")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "  - Message Limit: \(SessionManager.shared.freeMessagesLimit)")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "  - Message Cooldown: \(SessionManager.shared.freeMessagesCooldownSeconds)s")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "  - First Account Time: \(UserSessionManager.shared.firstAccountCreatedTime)")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "  - New User Period: \(SessionManager.shared.newUserFreePeriodSeconds)s")
+        
+        // Check message limits before sending
+        let result = MessageLimitManager.shared.checkMessageLimit()
+        
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleSendMessage() MessageLimit Result:")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "  - Can Proceed: \(result.canProceed)")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "  - Show Popup: \(result.showPopup)")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "  - Current Usage: \(result.currentUsage)")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "  - Limit: \(result.limit)")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "  - Remaining Cooldown: \(result.remainingCooldown)s")
+        
+        if result.showPopup {
+            // Show popup if limits reached
+            messageLimitResult = result
+            showMessageLimitPopup = true
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleSendMessage() Message limit reached, showing popup")
+            return
+        }
+        
+        if result.canProceed {
+            // Proceed with message sending
+            MessageLimitManager.shared.performMessageSend { success in
+                if success {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleSendMessage() Message limit check passed, proceeding with send")
+                    sendMessage()
+                } else {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleSendMessage() Message send blocked by limit manager")
+                }
+            }
+        } else {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleSendMessage() Cannot proceed with message - user over limit")
+            // If user can't proceed but popup wasn't shown, there might be an issue
+            if !result.showPopup {
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleSendMessage() WARNING: User can't proceed but popup not shown - this shouldn't happen")
+            }
+        }
+    }
+    
+    // MARK: - Debug Helper for Message Limit Testing
+    private func testMessageLimitPopup() {
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "testMessageLimitPopup() Testing message limit popup")
+        
+        // Create a test result that forces the popup to show
+        let testResult = FeatureLimitResult(
+            canProceed: false,
+            showPopup: true,
+            remainingCooldown: 60, // 1 minute cooldown
+            currentUsage: 5,
+            limit: 5
+        )
+        
+        messageLimitResult = testResult
+        showMessageLimitPopup = true
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "testMessageLimitPopup() Forced message limit popup to show")
     }
     
     private func sendMessage() {
@@ -1616,13 +1722,6 @@ struct MessagesView: View {
         guard !text.isEmpty else { return }
         
         AppLogger.log(tag: "LOG-APP: MessagesView", message: "sendMessage() sending message: \(text)")
-        
-        // ANDROID PARITY: Check if user is shadow banned for text moderation
-        if ModerationSettingsSessionManager.shared.textModerationIssueSB {
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "sendMessage() User is shadow banned for text moderation - blocking message")
-            showToastMessage("Your messaging is temporarily restricted due to policy violations. Please try again later.")
-            return
-        }
         
         // ANDROID PARITY: Check for app name profanity and increment moderation score
         if Profanity.share.doesContainProfanityAppName(text) {
@@ -1640,8 +1739,7 @@ struct MessagesView: View {
         checkConversationStarted()
         
         if !conversationStarted {
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "sendMessage() First message detected - showing moderation toast")
-            showToastMessage("Your message is moderated")
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "sendMessage() First message detected")
             
             if moveToInbox && bad {
                 AppLogger.log(tag: "LOG-APP: MessagesView", message: "sendMessage() Moving to inbox due to profanity in first message")
@@ -1703,6 +1801,9 @@ struct MessagesView: View {
                     // Increment message sent counter for rating system (Android Parity)
                     MessagingSettingsSessionManager.shared.incrementMessageCount()
                     
+                    // Increment per-user message count for message limit popup
+                    MessagingSettingsSessionManager.shared.incrementMessageCount(otherUserId: self.otherUser.id)
+                    
                     // MARK: - Android Parity: Convert Inbox Chat to Regular Chat
                     // When user sends message from inbox chat, convert it to regular chat (matching Android's setInBox(false))
                     // Note: Only updates Firebase - local database will be updated by ChatsSyncService listener
@@ -1755,15 +1856,7 @@ struct MessagesView: View {
             }
     }
     
-    /// DEPRECATED: Direct local database updates bypass Firebase listener flow
-    /// This function is no longer used - ChatsSyncService handles all local database updates
-    /// Keeping for reference but should not be called
-    private func updateLocalChatInboxStatus(inbox: Bool) {
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "updateLocalChatInboxStatus() DEPRECATED: This function should not be called - ChatsSyncService handles database updates")
-        
-        // This function is intentionally left empty to prevent direct database updates
-        // ChatsSyncService Firebase listener will handle all local database updates for Android parity
-    }
+    // REMOVED: updateLocalChatInboxStatus() - ChatsSyncService handles all database updates
     
     // MARK: - Android Parity: Conversation Tracking
     
@@ -2548,7 +2641,10 @@ struct MessagesView: View {
                      self.updateLastMessage(text: "📷 Image", timestamp: timestamp)
                      
                      // Increment message sent counter for rating system (Android Parity)
-                     SessionManager.shared.incrementTotalNoOfMessageSent()
+                     MessagingSettingsSessionManager.shared.incrementMessageCount()
+                     
+                     // Increment per-user message count for message limit popup
+                     MessagingSettingsSessionManager.shared.incrementMessageCount(otherUserId: self.otherUser.id)
                  }
              }
     }
@@ -2650,12 +2746,11 @@ struct MessagesView: View {
         
         // Android Pattern: Check subscription status - live calls require Plus or Pro
         let subscriptionManager = SubscriptionSessionManager.shared
-        let isPlusSubscriber = subscriptionManager.isUserSubscribedToPlus()
-        let isProSubscriber = subscriptionManager.isUserSubscribedToPro()
+        let hasPlusAccess = subscriptionManager.hasPlusTierOrHigher()
         
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleLiveButtonTap() Subscription status - Plus: \(isPlusSubscriber), Pro: \(isProSubscriber)")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleLiveButtonTap() Subscription status - PlusOrHigher: \(hasPlusAccess)")
         
-        if isPlusSubscriber || isProSubscriber {
+        if hasPlusAccess {
             // Check if user has time remaining before starting live
             if currentSeconds <= 0 {
                 AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleLiveButtonTap() No liveSeconds available - showing time exceeded toast")
@@ -2734,29 +2829,30 @@ struct MessagesView: View {
     /// Replenish liveSeconds based on subscription status (Android Parity)
     /// This matches Android's subscription replenishment logic and prevents immediate timer expiration
     private func replenishLiveSecondsIfNeeded() {
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "replenishLiveSecondsIfNeeded() Checking replenishment needs")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "replenishLiveSecondsIfNeeded() Checking replenishment needs using TimeAllocationManager")
+        
+        // Use TimeAllocationManager for subscription-based time allocation
+        TimeAllocationManager.shared.replenishLiveSecondsIfNeeded()
         
         let currentSeconds = SessionManager.shared.liveSeconds
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "replenishLiveSecondsIfNeeded() Current liveSeconds: \(currentSeconds)")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "replenishLiveSecondsIfNeeded() Current liveSeconds after replenishment: \(currentSeconds)")
         
         // Android Parity: Check subscription status
         let subscriptionManager = SubscriptionSessionManager.shared
-        let isPlusSubscriber = subscriptionManager.isUserSubscribedToPlus()
-        let isProSubscriber = subscriptionManager.isUserSubscribedToPro()
+        let hasPlusAccess = subscriptionManager.hasPlusTierOrHigher()
         
         // ANDROID PARITY: Check legacy premium status as fallback (for backward compatibility)
         let isLegacyPremium = MessagingSettingsSessionManager.shared.premiumActive
         
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "replenishLiveSecondsIfNeeded() Subscription status - Plus: \(isPlusSubscriber), Pro: \(isProSubscriber), Legacy Premium: \(isLegacyPremium)")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "replenishLiveSecondsIfNeeded() Subscription status - PlusOrHigher: \(hasPlusAccess), Legacy Premium: \(isLegacyPremium)")
         
-        if isPlusSubscriber || isProSubscriber || isLegacyPremium {
-            // Android Parity: Premium users get 15000 seconds (matching SubscriptionBillingManager.swift)
-            if currentSeconds <= 0 {
-                MessagingSettingsSessionManager.shared.liveSeconds = 15000
-                AppLogger.log(tag: "LOG-APP: MessagesView", message: "replenishLiveSecondsIfNeeded() Premium user - replenished to 15000 seconds")
-                showToastMessage("Premium live time replenished")
+        if hasPlusAccess || isLegacyPremium {
+            // Time allocation managed by TimeAllocationManager
+            if currentSeconds > 0 {
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "replenishLiveSecondsIfNeeded() Premium user - has \(currentSeconds) seconds remaining in current period")
             } else {
-                AppLogger.log(tag: "LOG-APP: MessagesView", message: "replenishLiveSecondsIfNeeded() Premium user - still has \(currentSeconds) seconds remaining")
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "replenishLiveSecondsIfNeeded() Premium user - no time remaining in current subscription period")
+                showToastMessage("Live time allocation exhausted for this subscription period")
             }
         } else {
             // ANDROID PARITY: Free users always get 60 seconds per session (matching Android onRewarded() method)
@@ -2803,6 +2899,12 @@ struct MessagesView: View {
             
             // Android Pattern: Decrement seconds in session manager
             SessionManager.shared.liveSeconds = max(0, remainingSeconds - 1)
+            
+            // Track time consumption in TimeAllocationManager for subscription users
+            let subscriptionManager = SubscriptionSessionManager.shared
+            if subscriptionManager.hasPlusTierOrHigher() {
+                TimeAllocationManager.shared.consumeLiveTime(seconds: 1)
+            }
             
             // Android Pattern: Auto-stop when timer finishes
             if SessionManager.shared.liveSeconds <= 0 {

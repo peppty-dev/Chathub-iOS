@@ -560,8 +560,8 @@ struct LoginView: View {
      AppLogger.log(tag: "LOG-APP: LoginView", message: "handleExistingSession() - User already logged in")
      // ANDROID PARITY: Clear filters and navigate like Android
      clearAllFilters()
-     GamesService.shared.fetchGamesIfNeeded()
-             MessagingSettingsSessionManager.shared.lastMessageReceivedTime = Date().timeIntervalSince1970
+     // REMOVED: Games fetch moved to centralized AppDelegate initialization
+     MessagingSettingsSessionManager.shared.lastMessageReceivedTime = Date().timeIntervalSince1970
      
      // ANDROID PARITY: Set user online status when existing user opens app (like Android)
      OnlineStatusService.shared.setUserOnline()
@@ -884,7 +884,7 @@ struct LoginView: View {
              checkAndSetupFirstTimeDeviceAccount(deviceId: deviceId)
              setupFirebaseAccountGenderCounter()
              setupSession(deviceToken: deviceToken)
-             GamesService.shared.fetchGamesIfNeeded()
+             // REMOVED: Games fetch moved to centralized AppDelegate initialization
              
              // CRITICAL FIX: Add small delay to ensure Firebase document is fully created before setting online status
              DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {

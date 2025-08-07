@@ -3,6 +3,7 @@ import UIKit
 import FirebaseFirestore
 import AVFoundation
 import FirebaseAnalytics
+import SDWebImageSwiftUI
 
 // MARK: - RewardType Enum (Previously from VAdEnhancer)
 enum RewardType {
@@ -44,6 +45,7 @@ struct ProfileView: View {
     @State private var showConversationLimitPopup = false
     @State private var showToast = false
     @State private var toastMessage = ""
+    @State private var showSubscriptionView = false
     
     // Conversation Limit Popup Data (New System)
     @State private var conversationLimitResult: FeatureLimitResult?
@@ -104,6 +106,10 @@ struct ProfileView: View {
     // New Popup States (Android Parity - Using specific popups)
     @State private var showVoiceCallPopup = false
     @State private var showVideoCallPopup = false
+    
+    // MARK: - Conversation Flow Tracking
+    @State private var conversationFlowSessionId: String?
+    @State private var conversationFlowStartTime: Date?
 
     var body: some View {
         ZStack {
@@ -120,14 +126,15 @@ struct ProfileView: View {
                         AppLogger.log(tag: "LOG-APP: ProfileView", message: "ConversationLimitPopup onStartConversation callback - resetting popup state")
                         showConversationLimitPopup = false
                         conversationLimitResult = nil
-                        handleStartConversation() 
+                        handleStartConversationFromPopup() 
                     },
                     onUpgradeToPremium: { 
                         AppLogger.log(tag: "LOG-APP: ProfileView", message: "ConversationLimitPopup onUpgradeToPremium callback - resetting popup state")
                         showConversationLimitPopup = false
                         conversationLimitResult = nil
                         navigateToSubscription() 
-                    }
+                    },
+                    isShadowBan: ModerationSettingsSessionManager.shared.textModerationIssueSB && result.remainingCooldown > 0
                 )
             }
             // Voice Call popup overlay (Android Parity)
@@ -299,6 +306,15 @@ struct ProfileView: View {
                         }
                     },
                     isActive: $navigateToProfileOptions
+                ) {
+                    EmptyView()
+                }
+                .hidden()
+                
+                // NavigationLink for subscription view - opens as full screen intent
+                NavigationLink(
+                    destination: SubscriptionView(),
+                    isActive: $showSubscriptionView
                 ) {
                     EmptyView()
                 }
@@ -495,7 +511,7 @@ struct ProfileView: View {
         VStack(spacing: 0) {
             // Profile Image - exact same size and styling as real profile image
             VStack(spacing: 12) {
-                skeletonProfileImage()
+                unifiedProfileImage(profile: nil, isInteractive: false)
                 
                 // Show username immediately if available from online users list (ONLY username, no other details)
                 VStack(spacing: 8) {
@@ -510,80 +526,77 @@ struct ProfileView: View {
                             .frame(height: 26) // Reserve space for username
                     }
                     
-                    // Reserve space for online status (will be populated from full profile)
-                    // Online status: ~14px font + 12px padding + 8px spacing = ~34px total
-                    Spacer()
-                        .frame(height: 34)
+                    // Don't reserve space for online status to match offline users (most common case)
+                    // Online status will be added when profile data loads
                 }
             }
             .padding(.horizontal, 20)
             .padding(.top, 12)
             
-            // Spacing before action buttons (reserve space for potential subscription header)
-            // Real profile can have either:
-            // - Subscription header: 24px spacing + 24px padding + 17px text = 65px total
-            // - No subscription: 32px spacing
-            // Reserve the larger space to prevent layout shifts
+            // Spacing before action buttons - matches the actual profile view spacing
+            // Use consistent 32px spacing just like the real profile view when no subscription
             Spacer()
-                .frame(height: 65)
+                .frame(height: 32)
             
             // Action Buttons - ALWAYS SHOW THESE (they're functional even during loading)
             VStack(spacing: 0) {
                 enhancedActionButtonsSection
             }
             
-            // Reserve space for profile details section (will be populated when full data loads)
-            VStack(spacing: 0) {
-                Spacer()
-                    .frame(height: 24)
-                
-                // Don't show any details from online users list - wait for full profile data
-                Spacer()
-                    .frame(height: 120) // Reserve space for details section
-            }
+            // Add spacing after buttons but don't reserve fixed height
+            // Profile details will appear here when data loads
+            Spacer()
+                .frame(height: 24)
         }
     }
     
-    @ViewBuilder
-    private func skeletonProfileImage() -> some View {
+        @ViewBuilder
+    private func unifiedProfileImage(profile: UserProfile? = nil, isInteractive: Bool = true) -> some View {
+        let imageUrl = profile?.profileImage ?? initialProfileImage
+        let gender = profile?.gender ?? initialGender
+        let isOnline = profile?.isOnline ?? false
+        
         ZStack {
-            // Shadow layer (matches profileImageShadow)
-            Circle()
-                .fill(Color.black.opacity(0.08))
-                .frame(width: 160, height: 160)
-                .offset(y: 2)
-                .blur(radius: 4)
+            // Shadow layer - consistent for both states
+            profileImageShadow
             
-            // Show actual profile image if available from online users list (for immediate display)
-            if let imageUrl = initialProfileImage, !imageUrl.isEmpty && imageUrl != "null",
+            // Profile image content
+            if let imageUrl = imageUrl, !imageUrl.isEmpty && imageUrl != "null",
                let url = URL(string: imageUrl) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .empty:
-                        skeletonProfilePlaceholder()
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 160, height: 160)
-                            .clipShape(Circle())
-                            .overlay(profileImageBorder)
-                            .overlay(profileImageInnerHighlight)
-                    case .failure(_):
-                        skeletonProfilePlaceholder()
-                    @unknown default:
-                        skeletonProfilePlaceholder()
-                    }
+                WebImage(url: url) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    unifiedProfilePlaceholder(gender: gender)
                 }
+                .indicator(.activity)
+                .transition(.opacity)
+                .frame(width: 160, height: 160)
+                .clipShape(Circle())
+                .overlay(profileImageBorder)
+                .overlay(profileImageInnerHighlight)
             } else {
-                skeletonProfilePlaceholder()
+                unifiedProfilePlaceholder(gender: gender)
+                    .overlay(profileImageBorder)
+                    .overlay(profileImageInnerHighlight)
+            }
+            
+            // Online indicator (only for loaded profile)
+            if let profile = profile, isOnline {
+                onlineIndicator(for: profile)
+            }
+        }
+        .contentShape(Circle())
+        .onTapGesture {
+            if isInteractive, let profile = profile, !profile.profileImage.isEmpty && profile.profileImage != "null" {
+                showPhotoViewer = true
             }
         }
     }
     
     @ViewBuilder
-    private func skeletonProfilePlaceholder() -> some View {
-        // Use gender-based default image if available, otherwise generic placeholder
+    private func unifiedProfilePlaceholder(gender: String?) -> some View {
         ZStack {
             Circle()
                 .fill(
@@ -598,11 +611,9 @@ struct ProfileView: View {
                 )
                 .frame(width: 160, height: 160)
                 .clipShape(Circle())
-                .overlay(profileImageBorder)
-                .overlay(profileImageInnerHighlight)
             
-            // Use gender-specific icon if gender is available from online users list (male/female icons)
-            if let gender = initialGender {
+            // Gender-specific icon or default
+            if let gender = gender {
                 Image(gender.lowercased() == "male" ? "male" : "female")
                     .resizable()
                     .aspectRatio(contentMode: .fill)
@@ -610,7 +621,6 @@ struct ProfileView: View {
                     .frame(width: 160, height: 160)
                     .clipShape(Circle())
             } else {
-                // Default person icon
                 Image(systemName: "person.circle.fill")
                     .font(.system(size: 60))
                     .foregroundColor(Color("shade5"))
@@ -642,7 +652,7 @@ struct ProfileView: View {
         VStack(spacing: 0) {
             // Profile Image with enhanced shadow and styling (standardized spacing)
             VStack(spacing: 12) {
-                profileImageButton(for: profile)
+                unifiedProfileImage(profile: profile, isInteractive: true)
                 
                 // User Name with standardized typography (matching EditProfileView)
                 VStack(spacing: 8) {
@@ -675,31 +685,9 @@ struct ProfileView: View {
             .padding(.horizontal, 20)
             .padding(.top, 12) // Standardized top padding - reduced further
             
-            // Subscriber header strip (full-width) with better spacing
-            if let tier = profile.subscriptionTier, !tier.isEmpty, tier != "none" {
-                VStack(spacing: 0) {
-                    Spacer()
-                        .frame(height: 24)
-                    
-                    Text(getSubscriptionDisplayText(tier: tier))
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundColor(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(getSubscriptionGradient(tier: tier))
-                        .overlay(
-                            // Subtle shadow effect
-                            Rectangle()
-                                .fill(Color.black.opacity(0.1))
-                                .frame(height: 1)
-                                .offset(y: 1),
-                            alignment: .bottom
-                        )
-                }
-            } else {
-                Spacer()
-                    .frame(height: 32)
-            }
+            // Consistent spacing before action buttons - always 32px
+            Spacer()
+                .frame(height: 32)
             
             // Action Buttons with reduced spacing
             if !isBlocked && !otherUserBlocked {
@@ -734,33 +722,48 @@ struct ProfileView: View {
             }
         }()
         
-        if userDetails.isEmpty {
+        let pillSpacing: CGFloat = 12
+        
+        // Check if user has subscription to show as a badge
+        let subscriptionExpiry = profile.subscriptionExpiry ?? 0
+        let subscriptionTier = profile.subscriptionTier ?? ""
+        let currentTime = Int64(Date().timeIntervalSince1970)
+        let hasSubscription = !subscriptionTier.isEmpty && 
+                              subscriptionTier != "none" && 
+                              subscriptionExpiry > currentTime
+        
+        if userDetails.isEmpty && !hasSubscription {
             let _ = AppLogger.log(tag: "LOG-APP: ProfileView", message: "userDetailsFlowLayout() ⚠️ No details to display - showing empty state")
             // Show a message when no details are available
-            VStack(spacing: 12) {
-                HStack(spacing: 12) {
-                    subscriptionBadge(for: profile)
-                }
-                
-                Text("No additional profile details available")
-                    .font(.system(size: 14))
-                    .foregroundColor(Color("shade6"))
-                    .padding()
-            }
-            .padding(.horizontal)
+            Text("No additional profile details available")
+                .font(.system(size: 14))
+                .foregroundColor(Color("shade6"))
+                .padding()
+                .padding(.horizontal)
         } else {
-            let pillSpacing: CGFloat = 12
             if #available(iOS 16.0, *) {
                 FlowLayout(spacing: pillSpacing) {
+                    // Show subscription badge first if available
+                    if hasSubscription {
+                        subscriptionBadge(for: profile)
+                    }
+                    // Then show other user details
                     ForEach(userDetails, id: \.self) { chip in
                         UserDetailChip(detail: chip)
                     }
                 }
                 .padding(.horizontal)
             } else {
-                HStack(spacing: pillSpacing) {
-                    ForEach(userDetails, id: \.self) { chip in
-                        UserDetailChip(detail: chip)
+                VStack(alignment: .leading, spacing: pillSpacing) {
+                    // Show subscription badge first if available
+                    if hasSubscription {
+                        subscriptionBadge(for: profile)
+                    }
+                    // Then show other details in rows
+                    HStack(spacing: pillSpacing) {
+                        ForEach(userDetails, id: \.self) { chip in
+                            UserDetailChip(detail: chip)
+                        }
                     }
                 }
                 .padding(.horizontal)
@@ -862,82 +865,12 @@ struct ProfileView: View {
         }
     }
     
-    @ViewBuilder
-    private func profileImageButton(for profile: UserProfile) -> some View {
-        Button(action: {
-            if !profile.profileImage.isEmpty && profile.profileImage != "null" {
-                showPhotoViewer = true
-            }
-        }) {
-            ZStack {
-                profileImageShadow
-                profileImageContent(for: profile)
-                if profile.isOnline {
-                    onlineIndicator(for: profile)
-                }
-            }
-        }
-    }
-    
     private var profileImageShadow: some View {
         Circle()
             .fill(Color.black.opacity(0.08))
             .frame(width: 160, height: 160)
             .offset(y: 2)
             .blur(radius: 4)
-    }
-    
-    private func profileImageContent(for profile: UserProfile) -> some View {
-        AsyncImage(url: URL(string: profile.profileImage)) { phase in
-            switch phase {
-            case .empty:
-                profileImagePlaceholder(for: profile)
-            case .success(let image):
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 160, height: 160)
-                    .clipShape(Circle())
-                    .overlay(profileImageBorder)
-                    .overlay(profileImageInnerHighlight)
-                    .transition(.opacity.animation(.easeInOut(duration: 0.5)))
-                    .onAppear {
-                        AppLogger.log(tag: "LOG-APP: ProfileView", message: "profileImageButton() image loaded successfully")
-                    }
-            case .failure(let error):
-                profileImagePlaceholder(for: profile)
-                    .onAppear {
-                        AppLogger.log(tag: "LOG-APP: ProfileView", message: "profileImageButton() image loading failed: \(error.localizedDescription)")
-                    }
-            @unknown default:
-                profileImagePlaceholder(for: profile)
-            }
-        }
-    }
-    
-    private func profileImagePlaceholder(for profile: UserProfile) -> some View {
-        ZStack {
-            Circle()
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color("shade3"),
-                            Color("shade4")
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-            
-            Image(profile.gender == "Male" ? "male" : "female")
-                .resizable()
-                .aspectRatio(contentMode: .fill)
-                .opacity(0.8)
-        }
-        .frame(width: 160, height: 160)
-        .clipShape(Circle())
-        .overlay(profileImageBorder)
-        .overlay(profileImageInnerHighlight)
     }
     
     private var profileImageBorder: some View {
@@ -2034,11 +1967,52 @@ struct ProfileView: View {
         impact.impactOccurred()
     }
     
+    // MARK: - User Type Determination
+    private func determineUserType() -> ConversationUserType {
+        let subscriptionManager = SubscriptionSessionManager.shared
+        
+        if subscriptionManager.hasProTier() {
+            return .pro
+        } else if subscriptionManager.hasPlusTierOrHigher() {
+            return .plus
+        } else if subscriptionManager.hasLiteTierOrHigher() {
+            return .lite
+        }
+        
+        // Check if new user
+        if ConversationLimitManagerNew.shared.isNewUser() {
+            return .newUser
+        }
+        
+        return .free
+    }
+    
     // MARK: - Conversation Start Logic (Always-Show Popup Strategy)
     private func handleConversationStart() {
+        // Generate unique flow session ID for tracking
+        let flowId = "FLOW_\(Int(Date().timeIntervalSince1970))_\(Int.random(in: 1000...9999))"
+        conversationFlowSessionId = flowId
+        conversationFlowStartTime = Date()
+        
+        // Determine user type for logging
+        let userType = determineUserType()
+        
+        // Log flow start with structured logging
+        ConversationFlowLogger.shared.logFlowStart(
+            initiatorUserId: SessionManager.shared.userId ?? "unknown",
+            targetUserId: otherUserId,
+            userType: userType,
+            sessionId: flowId
+        )
+        
         AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleConversationStart() Starting conversation initiation")
         
         guard userProfile != nil else {
+            ConversationFlowLogger.shared.logFlowError(
+                flowId: flowId,
+                error: NSError(domain: "ProfileView", code: 1, userInfo: [NSLocalizedDescriptionKey: "No user profile available"]),
+                step: .start
+            )
             AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleConversationStart() No user profile available")
             return
         }
@@ -2054,7 +2028,15 @@ struct ProfileView: View {
         // For new conversations - Check conversation limits using always-show popup strategy
         AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleConversationStart() New conversation - checking limits")
         
+        let limitCheckStartTime = Date()
         let result = ConversationLimitManagerNew.shared.checkConversationLimit()
+        
+        // Log limit check result with structured logging
+        ConversationFlowLogger.shared.logLimitCheck(
+            flowId: flowId,
+            result: result,
+            userType: userType
+        )
         
         // Track conversation button tap
         ConversationAnalytics.shared.trackConversationButtonTapped(
@@ -2069,11 +2051,19 @@ struct ProfileView: View {
             conversationLimitResult = result
             showConversationLimitPopup = true
         } else {
-            // Plus subscribers and new users proceed directly without popup
-            AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleConversationStart() Plus/New user - proceeding directly with algorithm")
+            // ONLY Plus+ subscribers and new users proceed directly without popup AND without algorithm
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleConversationStart() Plus+/New user - bypassing popup AND algorithm")
+            
+            // Log routing decision for privileged users
+            ConversationFlowLogger.shared.logRoutingDecision(
+                flowId: flowId,
+                decision: RoutingDecision(toInbox: false, isPaid: SubscriptionSessionManager.shared.hasPlusTierOrHigher()),
+                userType: userType,
+                bypassReason: "Privileged user bypass (Plus+/New user)"
+            )
             
             // Track bypass analytics
-            if SubscriptionSessionManager.shared.isUserSubscribedToPlus() {
+            if SubscriptionSessionManager.shared.hasPlusTierOrHigher() {
                 ConversationAnalytics.shared.trackPlusSubscriberBypass()
             } else if ConversationLimitManagerNew.shared.isNewUser() {
                 // Calculate remaining new user time
@@ -2084,13 +2074,31 @@ struct ProfileView: View {
                 ConversationAnalytics.shared.trackNewUserBypass(newUserTimeRemaining: remainingTime)
             }
             
-            startAlgorithm()
+            // Create direct chat without running inbox routing algorithm
+            createDirectChatBypassingAllChecks()
         }
     }
     
-    // MARK: - New Conversation Flow (Always-Show Popup Strategy)
-    private func startConversation() {
-        AppLogger.log(tag: "LOG-APP: ProfileView", message: "startConversation() Starting new conversation with algorithm")
+    // MARK: - Popup Flow Management (Free & Lite Users)
+    private func handleStartConversationFromPopup() {
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleStartConversationFromPopup() User clicked 'Start Conversation' in popup")
+        
+        // Re-check limits (cooldown might have changed)
+        let result = ConversationLimitManagerNew.shared.checkConversationLimit()
+        
+        if result.canProceed {
+            incrementUsageAndProceedWithRouting()
+        } else {
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleStartConversationFromPopup() Still at limit, showing toast")
+            toastMessage = "Please wait for the cooldown to finish"
+            withAnimation {
+                showToast = true
+            }
+        }
+    }
+    
+    private func incrementUsageAndProceedWithRouting() {
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "incrementUsageAndProceedWithRouting() Incrementing usage count and proceeding")
         
         guard let profile = userProfile else { return }
         
@@ -2105,32 +2113,15 @@ struct ProfileView: View {
             isFirstConversationOfSession: isFirstConversationOfSession
         )
         
-        // Increment conversation count and proceed with algorithm
+        // Increment conversation count and proceed to routing decision
         ConversationLimitManagerNew.shared.performConversationStart { success in
             if success {
                 DispatchQueue.main.async {
-                    // Use algorithm to determine inbox/outbox routing
-                    self.startAlgorithm()
+                    // Proceed to routing decision (Lite check + Algorithm)
+                    self.executeRoutingDecisionFlow()
                 }
             } else {
-                AppLogger.log(tag: "LOG-APP: ProfileView", message: "startConversation() Failed to start conversation")
-            }
-        }
-    }
-    
-    private func handleStartConversation() {
-        AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleStartConversation() Free conversation button tapped")
-        
-        // Check limits again and proceed if allowed
-        let result = ConversationLimitManagerNew.shared.checkConversationLimit()
-        
-        if result.canProceed {
-            startConversation()
-        } else {
-            AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleStartConversation() Still at limit, showing toast")
-            toastMessage = "Please wait for the cooldown to finish"
-            withAnimation {
-                showToast = true
+                AppLogger.log(tag: "LOG-APP: ProfileView", message: "incrementUsageAndProceedWithRouting() Failed to increment usage count")
             }
         }
     }
@@ -2159,29 +2150,110 @@ struct ProfileView: View {
         )
     }
     
-    // MARK: - Start Algorithm (Android Parity)
-    private func startAlgorithm() {
+    // MARK: - Routing Decision Flow (Lite Check + Algorithm)
+    private func executeRoutingDecisionFlow() {
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "executeRoutingDecisionFlow() Determining routing for Free/Lite user from popup")
+        
         guard let profile = userProfile else { return }
         
         let chatFlowCallback = ProfileViewChatFlowCallback(
             onChatCreated: { (chatId: String, otherUserId: String) in
-                AppLogger.log(tag: "LOG-APP: ProfileView", message: "startAlgorithm() Chat created successfully: \(chatId)")
+                AppLogger.log(tag: "LOG-APP: ProfileView", message: "executeRoutingDecisionFlow() Chat created successfully: \(chatId)")
                 DispatchQueue.main.async {
                     self.navigateToMessageView(chatId: chatId, otherUserId: otherUserId)
                 }
             },
             onError: { (error: Error) in
-                AppLogger.log(tag: "LOG-APP: ProfileView", message: "startAlgorithm() Error: \(error.localizedDescription)")
+                AppLogger.log(tag: "LOG-APP: ProfileView", message: "executeRoutingDecisionFlow() Error: \(error.localizedDescription)")
             }
         )
         
-        ChatFlowManager.shared.startAlgorithm(
+        // Execute the routing decision flow (Lite check first, then algorithm for Free users)
+        ChatFlowManager.shared.executeInboxRoutingDecision(
             otherUserId: otherUserId,
             otherUserName: profile.name,
             otherUserGender: profile.gender,
             otherUserCountry: profile.country,
             otherUserImage: profile.profileImage,
             otherUserDevId: profile.devid,
+            otherUserAge: profile.age,
+            otherUserLanguage: profile.language ?? "",
+            callback: chatFlowCallback
+        )
+    }
+    
+    // MARK: - Direct Chat Creation (Bypass All Limits & Algorithm)
+    private func createDirectChatBypassingAllChecks() {
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "createDirectChatBypassingAllChecks() Creating direct chat for privileged users (Plus+/New users)")
+        
+        guard let profile = userProfile else {
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "createDirectChatBypassingAllChecks() No user profile available")
+            return
+        }
+        
+        let chatFlowCallback = ProfileViewChatFlowCallback(
+            onChatCreated: { (chatId: String, otherUserId: String) in
+                AppLogger.log(tag: "LOG-APP: ProfileView", message: "createDirectChatBypassingAllChecks() Direct chat created successfully: \(chatId)")
+                
+                // Log successful chat creation with structured logging
+                if let flowId = self.conversationFlowSessionId,
+                   let startTime = self.conversationFlowStartTime {
+                    let totalTime = Date().timeIntervalSince(startTime)
+                    
+                    ConversationFlowLogger.shared.logChatCreation(
+                        flowId: flowId,
+                        chatId: chatId,
+                        routing: RoutingDecision(toInbox: false, isPaid: SubscriptionSessionManager.shared.hasPlusTierOrHigher()),
+                        timeTaken: totalTime
+                    )
+                    
+                    // Log performance metrics
+                    let metrics = ConversationFlowMetrics(
+                        limitCheckTime: 0.1, // Estimated for bypass case
+                        algorithmTime: 0.0,  // Skipped for privileged users
+                        chatCreationTime: 0.5, // Estimated
+                        totalTime: totalTime
+                    )
+                    
+                    ConversationFlowLogger.shared.logPerformanceMetrics(
+                        flowId: flowId,
+                        metrics: metrics
+                    )
+                }
+                
+                DispatchQueue.main.async {
+                    self.navigateToMessageView(chatId: chatId, otherUserId: otherUserId)
+                }
+            },
+            onError: { (error: Error) in
+                AppLogger.log(tag: "LOG-APP: ProfileView", message: "createDirectChatBypassingAllChecks() Error: \(error.localizedDescription)")
+                
+                // Log error with structured logging
+                if let flowId = self.conversationFlowSessionId {
+                    ConversationFlowLogger.shared.logFlowError(
+                        flowId: flowId,
+                        error: error,
+                        step: .chatCreation,
+                        context: [
+                            "method": "createDirectChatBypassingAllChecks",
+                            "userType": self.determineUserType().description,
+                            "targetUserId": otherUserId
+                        ]
+                    )
+                }
+            }
+        )
+        
+        let hasPlusOrHigher = SubscriptionSessionManager.shared.hasPlusTierOrHigher()
+        
+        // Direct chat creation - bypasses all limits, popups, and algorithm
+        ChatFlowManager.shared.createDirectChat(
+            otherUserId: otherUserId,
+            otherUserName: profile.name,
+            otherUserGender: profile.gender,
+            otherUserImage: profile.profileImage,
+            otherUserDevId: profile.devid,
+            isPremiumUser: hasPlusOrHigher,
             callback: chatFlowCallback
         )
     }
@@ -2209,13 +2281,15 @@ struct ProfileView: View {
         )
         
         // Use standard chat creation instead of handleRewardedAction (removed with ad system)
-        ChatFlowManager.shared.startAlgorithm(
+        ChatFlowManager.shared.executeInboxRoutingDecision(
             otherUserId: otherUserId,
             otherUserName: profile.name,
             otherUserGender: profile.gender,
             otherUserCountry: profile.country,
             otherUserImage: profile.profileImage,
             otherUserDevId: profile.devid,
+            otherUserAge: profile.age,
+            otherUserLanguage: profile.language ?? "",
             callback: chatFlowCallback
         )
     }
@@ -2386,8 +2460,7 @@ struct ProfileView: View {
     
     private func navigateToSubscription() {
         AppLogger.log(tag: "LOG-APP: ProfileView", message: "navigateToSubscription() Navigating to subscription")
-        // TODO: Navigate to subscription view
-        // For now, just log the action
+        showSubscriptionView = true
     }
     
     private func startDirectChat() {

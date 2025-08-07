@@ -15,6 +15,7 @@ target 'chathub' do
   
   # Core Utility Pods
   pod 'SDWebImage'
+  pod 'SDWebImageSwiftUI'
   pod 'AgoraRtcEngine_iOS'
   pod 'KeychainSwift'
 

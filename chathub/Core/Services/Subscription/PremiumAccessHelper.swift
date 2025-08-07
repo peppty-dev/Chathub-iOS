@@ -81,24 +81,5 @@ class PremiumAccessHelper {
 
 // MARK: - Migration Helper Extensions
 
-extension SessionManager {
-    /**
-     * DEPRECATED: Use PremiumAccessHelper.hasPremiumAccess instead
-     * This property is maintained for backwards compatibility only
-     */
-    @available(*, deprecated, message: "Use PremiumAccessHelper.hasPremiumAccess instead")
-    var premiumAccessDeprecated: Bool {
-        return PremiumAccessHelper.hasPremiumAccess
-    }
-}
-
-extension UserDefaults {
-    /**
-     * DEPRECATED: Use PremiumAccessHelper.hasPremiumAccess instead
-     * Direct UserDefaults premium checks should be migrated to the subscription system
-     */
-    @available(*, deprecated, message: "Use PremiumAccessHelper.hasPremiumAccess instead")
-    func premiumActiveDeprecated() -> Bool {
-        return PremiumAccessHelper.hasPremiumAccess
-    }
-} 
+// REMOVED: Deprecated SessionManager and UserDefaults extensions
+// Use PremiumAccessHelper.hasPremiumAccess directly instead of deprecated methods 

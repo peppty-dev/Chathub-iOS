@@ -1,5 +1,6 @@
 import SwiftUI
 import FirebaseFirestore
+import SDWebImageSwiftUI
 
 struct InboxMessage: Identifiable, Codable {
     var id: String
@@ -239,6 +240,7 @@ struct InboxView: View {
                         deviceId: message.deviceId,
                         isOnline: true
                     ),
+                    sessionManager: SessionManager.shared,
                     isFromInbox: true, // CRITICAL: Mark this as inbox chat for Android parity
                     onDismiss: {
                         AppLogger.log(tag: "LOG-APP: InboxView", message: "MessagesView onDismiss() called - resetting showChatView")
@@ -421,7 +423,7 @@ struct InboxMessageRow: View {
             HStack(spacing: 0) {
                 // Profile Image (65dp as per Android ChatsViewHolder)
                 Button(action: onProfileTap) {
-                    AsyncImage(url: URL(string: message.profileImage)) { image in
+                    WebImage(url: URL(string: message.profileImage)) { image in
                         image
                             .resizable()
                             .aspectRatio(contentMode: .fill)
@@ -442,23 +444,23 @@ struct InboxMessageRow: View {
                 .padding(.top, 10)
                 .padding(.bottom, 10)
                 
-                // Content section - matching ChatsViewHolder structure exactly
-                VStack(alignment: .leading, spacing: 5) {
-                    // Username (16sp, marginTop 15dp) - matching ChatsViewHolder
+                // Content section - centered vertically
+                VStack(alignment: .leading, spacing: 4) {
+                    Spacer() // Top spacer for vertical centering
+                    
+                    // Username
                     Text(Profanity.share.removeProfanityNumbersAllowed(message.name))
                         .font(.system(size: 16, weight: .medium))
                         .foregroundColor(Color("dark"))
                         .lineLimit(1)
-                        .padding(.top, 15)
                     
-                    // Last message/time (13sp, marginTop 5dp) - matching ChatsViewHolder
+                    // Last message/time
                     Text(formatInboxMessage(message))
                         .font(.system(size: 13, weight: formatInboxMessage(message).hasPrefix("New Message") ? .bold : .medium))
                         .foregroundColor(formatInboxMessage(message).hasPrefix("New Message") ? Color("Red1") : Color("shade_600"))
                         .lineLimit(2)
-                        .padding(.top, 5)
                     
-                    Spacer()
+                    Spacer() // Bottom spacer for vertical centering
                 }
                 .padding(.leading, 20)
                 .padding(.trailing, 75) // Space for icon (marginEnd 75dp)

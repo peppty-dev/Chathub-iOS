@@ -103,7 +103,13 @@ struct FilterLimitPopupView: View {
                                     
                                     // Progress bar - decreases from right to left as time runs out
                                     Rectangle()
-                                        .fill(Color("blue"))
+                                        .fill(
+                                            LinearGradient(
+                                                colors: [Color("liteGradientStart"), Color("liteGradientEnd")],
+                                                startPoint: .leading,
+                                                endPoint: .trailing
+                                            )
+                                        )
                                         .frame(width: geometry.size.width * CGFloat(remainingTime / totalCooldownDuration), height: 4)
                                         .cornerRadius(2)
                                         .animation(.linear(duration: 0.1), value: remainingTime)

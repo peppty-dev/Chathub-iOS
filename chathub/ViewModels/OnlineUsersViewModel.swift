@@ -23,6 +23,17 @@ struct OnlineUserFilter: Codable {
     var minAge: String = ""
     var maxAge: String = ""
     var nearby: String = ""
+    
+    // Custom initializer for direct filter application
+    init(male: Bool = false, female: Bool = false, country: String = "", language: String = "", minAge: String = "", maxAge: String = "", nearby: String = "") {
+        self.male = male
+        self.female = female
+        self.country = country
+        self.language = language
+        self.minAge = minAge
+        self.maxAge = maxAge
+        self.nearby = nearby
+    }
 }
 
 class OnlineUsersViewModel: ObservableObject {
@@ -281,41 +292,75 @@ class OnlineUsersViewModel: ObservableObject {
         }
     }
 
+    /// Initial data load - only loads if no data exists, respects 30-minute refresh logic
+    /// This is the proper method to call from onAppear - it won't unnecessarily reload data
+    func initialLoadIfNeeded() {
+        AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "initialLoadIfNeeded() - Checking if initial load is needed")
+        
+        // Only fetch if we have no data at all
+        if users.isEmpty {
+            AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "initialLoadIfNeeded() - No data present, calling fetchUsers")
+            fetchUsers()
+        } else {
+            AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "initialLoadIfNeeded() - Data already present (\(users.count) users), no action needed")
+        }
+    }
+    
     /// Load users with Android parity logic - only fetch from Firebase when needed
     /// Matches Android OnlineUserListFragment.getOnlineUsers() logic exactly
     func fetchUsers() {
         AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsers() - Starting with Android parity logic")
         
-        // Check if Firebase refresh is needed using Android logic
-        let needsFirebaseSync = userSessionManager.shouldRefreshOnlineUsersFromFirebase()
+        // CRITICAL FIX: First check if we have any local data at all
+        // Load from local database to see what we have
+        loadUsersFromLocalDatabase()
+        
+        // CRITICAL FIX: Always force Firebase sync if database is empty, regardless of refresh time
+        // This ensures we get data on first launch or after database corruption
+        let needsFirebaseSync = users.isEmpty || userSessionManager.shouldRefreshOnlineUsersFromFirebase()
         
         if needsFirebaseSync {
-            AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsers() - Refresh time exceeded (30+ minutes), showing loading and triggering Firebase sync")
+            if users.isEmpty {
+                AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsers() - No local data found, forcing Firebase sync for initial load")
+            } else {
+                AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsers() - Refresh time exceeded (30+ minutes), showing loading and triggering Firebase sync")
+            }
+            
+            // ENHANCEMENT: Clear filters during periodic refresh for fresh data
+            if !users.isEmpty {
+                AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsers() - Clearing filters for fresh periodic refresh")
+                let filtersClearedSuccess = userSessionManager.clearAllFilters()
+                if filtersClearedSuccess {
+                    // Reset local filter object to match cleared state
+                    self.filter = OnlineUserFilter()
+                    AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsers() - Filters cleared successfully during periodic refresh")
+                }
+            }
             
             // ANDROID PARITY: Only show loading when we actually need to fetch from Firebase
             isLoading = true
             
-            // Load from local database first (shows cached data immediately while syncing)
-            loadUsersFromLocalDatabase()
-            
             // Trigger background Firebase sync (similar to Android OnlineUsersWorker)
             triggerBackgroundDataSync {
-                // Update refresh time after successful sync (matching Android)
-                self.userSessionManager.setOnlineUsersRefreshTime()
-                
-                // After sync, reload from the local database to update the UI
-                AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsers() - Firebase sync complete, reloading from local DB")
-                self.loadUsersFromLocalDatabase()
+                DispatchQueue.main.async {
+                    // Update refresh time after successful sync (matching Android)
+                    self.userSessionManager.setOnlineUsersRefreshTime()
+                    
+                    // After sync, reload from the local database to update the UI
+                    AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsers() - Firebase sync complete, reloading from local DB")
+                    self.loadUsersFromLocalDatabase()
+                    
+                    // CRITICAL FIX: Reset loading state after sync is complete
+                    self.isLoading = false
+                    AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsers() - Loading state reset after sync completion")
+                }
             }
         } else {
-            AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsers() - Refresh time not exceeded, using cached data only (no loading)")
+            AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsers() - Refresh time not exceeded and have local data (\(users.count) users), using cached data only")
             
             // CRITICAL FIX: Never show loading when using cached data - this prevents flicker
             // Local database queries should be instant like other apps
             self.isLoading = false
-            
-            // Always load from local database (shows cached data immediately)
-            loadUsersFromLocalDatabase()
         }
     }
     
@@ -378,28 +423,27 @@ class OnlineUsersViewModel: ObservableObject {
         forceRefreshUsers()
     }
 
-    /// Clear filter with fresh Firebase sync (behaves like refresh)
-    func clearFilter() {
-        AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "clearFilter() Clearing filters with fresh Firebase sync")
+    /// Clear filter locally without any data reload
+    /// Use this when user resets filters - only clears filter state, no data changes
+    func clearFilterLocallyOnly() {
+        AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "clearFilterLocallyOnly() Clearing filters locally without any data reload")
         
+        // Clear filter object and save to preferences
         self.filter = OnlineUserFilter()
         saveFilter()
         
-        // Force refresh from Firebase without filters (matching Android behavior)
-        forceRefreshUsers()
+        // IMPORTANT: Do NOT reload data here - only clear filter state
+        // The user list should remain exactly as it was, showing the same users
+        // No database queries, no Firebase calls, no data changes whatsoever
+        
+        AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "clearFilterLocallyOnly() Filters cleared - data unchanged as requested")
     }
+    
+    // REMOVED: clearFilter() method - was a security loophole that allowed bypassing rate limits
+    // Use clearFilterLocallyOnly() for user actions instead
 
-    /// Refresh filters from SessionManager and reload data (called after filters are applied externally)
-    func refreshFiltersFromSessionManager() {
-        AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "refreshFiltersFromSessionManager() Refreshing filters from SessionManager")
-        
-        // Load fresh filters from SessionManager
-        loadFiltersFromSessionManager()
-        saveFilter()
-        
-        // Force refresh from Firebase with new filters (matching Android behavior)
-        forceRefreshUsers()
-    }
+    // REMOVED: refreshFiltersFromSessionManager() - was causing unnecessary Firebase refreshes
+    // Use applyFilter() directly instead
 
     // MARK: - Private Helper Methods
     
@@ -476,9 +520,9 @@ class OnlineUsersViewModel: ObservableObject {
     
     /// Trigger background Firebase sync (similar to Android OnlineUsersWorker)
     private func triggerBackgroundDataSync(completion: (() -> Void)? = nil) {
-        AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "triggerBackgroundDataSync() - Starting background Firebase sync")
+        AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "triggerBackgroundDataSync() - Starting Firebase sync")
         
-        DispatchQueue.global(qos: .background).async { [weak self] in
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { 
                 AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "triggerBackgroundDataSync() - Self is nil, aborting")
                 completion?()
@@ -490,9 +534,9 @@ class OnlineUsersViewModel: ObservableObject {
             // This mimics Android's OnlineUsersWorker behavior
             var query: Query = Firestore.firestore().collection("Users")
                 .order(by: "last_time_seen", descending: true)
-                .limit(to: 10) // Fetch more for local storage
+                .limit(to: 50) // Increased limit to get more users initially
             
-            AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "triggerBackgroundDataSync() - Created base query with limit 10")
+            AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "triggerBackgroundDataSync() - Created base query with limit 50")
             
             // Apply filters to the background query
             let f = self.filter

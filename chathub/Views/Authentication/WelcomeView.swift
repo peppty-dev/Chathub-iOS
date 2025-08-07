@@ -64,7 +64,7 @@ struct WelcomeView: View {
                 VStack(spacing: 28) {
                     // Main illustration with hand emoji overlay
                     ZStack {
-                        Image("chathub")
+                        Image("AppIconDisplay")
                             .resizable()
                             .scaledToFit()
                             .frame(maxHeight: 200)
@@ -439,16 +439,9 @@ struct WelcomeView: View {
     private func setUpUserComesInToApp() {
         AppLogger.log(tag: "LOG-APP: WelcomeView", message: "setUpUserComesInToApp() Setting up user session")
         
-        // ENHANCEMENT: Clear all filters when welcome screen appears (every 1 hour)
-        // This provides a fresh start experience and prevents stale filters
-        AppLogger.log(tag: "LOG-APP: WelcomeView", message: "setUpUserComesInToApp() Clearing all filters for fresh start")
-        let filtersClearedSuccess = userSessionManager.clearAllFilters()
-        AppLogger.log(tag: "LOG-APP: WelcomeView", message: "setUpUserComesInToApp() Filters cleared successfully: \(filtersClearedSuccess)")
-        
-        // Filters cleared - no additional refresh notification needed
-        if filtersClearedSuccess {
-            AppLogger.log(tag: "LOG-APP: WelcomeView", message: "setUpUserComesInToApp() Filters cleared successfully")
-        }
+        // REMOVED: Filter clearing moved to 30-minute periodic refresh in OnlineUsersViewModel
+        // This prevents unnecessary filter clearing on every welcome screen appearance
+        AppLogger.log(tag: "LOG-APP: WelcomeView", message: "setUpUserComesInToApp() Filters will be cleared during periodic 30-minute refresh for optimal performance")
         
         let unixTime = Date().timeIntervalSince1970
         userSessionManager.welcomeTimer = unixTime
@@ -575,13 +568,8 @@ struct WelcomeView: View {
     private func initializeBackgroundTasks() {
         AppLogger.log(tag: "LOG-APP: WelcomeView", message: "initializeBackgroundTasks() Initializing background tasks")
         
-        // Android parity: GamesWorker equivalent
-        if !SessionManager.shared.gamesFetched {
-            AppLogger.log(tag: "LOG-APP: WelcomeView", message: "initializeBackgroundTasks() Starting games fetch task")
-            GamesService.shared.fetchGamesIfNeeded { success in
-                AppLogger.log(tag: "LOG-APP: WelcomeView", message: "initializeBackgroundTasks() Games fetch completed: \(success)")
-            }
-        }
+        // REMOVED: Games fetch moved to centralized AppDelegate initialization
+        // Games are now automatically available when this view loads
         
         // Android parity: ProfanityWorker equivalent
         AppLogger.log(tag: "LOG-APP: WelcomeView", message: "initializeBackgroundTasks() Starting profanity update task")

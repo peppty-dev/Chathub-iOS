@@ -89,11 +89,7 @@ class SubscriptionBillingManager: ObservableObject {
         }
     }
     
-    /// Legacy initialize method for backward compatibility
-    @available(*, deprecated, message: "Use initializeWithViewController instead")
-    func initialize(viewController: UIViewController, database: Firestore, sessionManager: SessionManager) {
-        initializeWithViewController(viewController, database: database, sessionManager: sessionManager)
-    }
+    // REMOVED: Legacy initialize method - use initializeWithViewController instead
     
     // MARK: - Access Methods
     

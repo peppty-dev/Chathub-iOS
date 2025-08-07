@@ -248,7 +248,9 @@ class ConversationAnalytics {
     func getUserType() -> String {
         let subscriptionManager = SubscriptionSessionManager.shared
         
-        if subscriptionManager.isUserSubscribedToPlus() {
+        if subscriptionManager.isUserSubscribedToPro() {
+            return "pro_subscriber"
+        } else if subscriptionManager.isUserSubscribedToPlus() {
             return "plus_subscriber"
         } else if subscriptionManager.isUserSubscribedToLite() {
             return "lite_subscriber"

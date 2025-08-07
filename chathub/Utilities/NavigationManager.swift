@@ -473,6 +473,7 @@ class NavigationManager: ObservableObject {
                     otherUserId: "unknown",
                     otherUserName: otherUserName,
                     otherUserProfileImage: "",
+                    otherUserGender: "Male",
                     chatId: channelName
                 ))
             }

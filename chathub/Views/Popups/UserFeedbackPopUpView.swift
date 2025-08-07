@@ -8,7 +8,8 @@ struct UserFeedbackPopUpView: View {
     
     var body: some View {
         ZStack {
-            Color("Background Color")
+            // Background overlay - tap to dismiss with enhanced contrast
+            Color.black.opacity(0.6)
                 .ignoresSafeArea()
                 .onTapGesture {
                     AppLogger.log(tag: "LOG-APP: UserFeedbackPopUpView", message: "onTapGesture() background tapped, dismissing popup")
@@ -66,8 +67,14 @@ struct UserFeedbackPopUpView: View {
                     .padding(.top, 12)
                     .padding(.bottom, 20)
                 }
-                .background(Color("background"))
-                .cornerRadius(15)
+                .background(
+                    RoundedRectangle(cornerRadius: 20, style: .continuous)
+                        .fill(Color("shade2"))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                        )
+                )
                 .padding(.horizontal, 15)
             }
         }

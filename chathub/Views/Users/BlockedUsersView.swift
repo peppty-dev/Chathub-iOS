@@ -1,5 +1,6 @@
 import SwiftUI
 import FirebaseFirestore
+import SDWebImageSwiftUI
 
 struct BlockedUsersView: View {
     @State private var blockedUsers: [Chat] = []
@@ -246,49 +247,37 @@ struct BlockedUserRow: View {
         HStack(spacing: 12) {
             // Profile Image
             Button(action: onProfileTap) {
-                AsyncImage(url: URL(string: user.ProfileImage.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")) { phase in
-                    switch phase {
-                    case .empty:
-                        ProgressView()
-                            .frame(width: 50, height: 50)
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 50, height: 50)
-                            .clipShape(Circle())
-                            .overlay(
-                                Circle()
-                                    .stroke(Color("shade3"), lineWidth: 2)
-                            )
-                            .onAppear {
-                                AppLogger.log(tag: "LOG-APP: BlockedUsersView", message: "blocked user image loaded")
-                            }
-                    case .failure(let error):
-                        Image(user.Gender == "Male" ? "male" : "female")
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 50, height: 50)
-                            .clipShape(Circle())
-                            .overlay(
-                                Circle()
-                                    .stroke(Color("shade3"), lineWidth: 2)
-                            )
-                            .onAppear {
-                                AppLogger.log(tag: "LOG-APP: BlockedUsersView", message: "blocked user image failed: \(error.localizedDescription)")
-                            }
-                    @unknown default:
-                        Image(user.Gender == "Male" ? "male" : "female")
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 50, height: 50)
-                            .clipShape(Circle())
-                            .overlay(
-                                Circle()
-                                    .stroke(Color("shade3"), lineWidth: 2)
-                            )
-                    }
+                WebImage(url: URL(string: user.ProfileImage.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    Image(user.Gender == "Male" ? "male" : "female")
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 50, height: 50)
                 }
+                .onSuccess { image, data, cacheType in
+                    AppLogger.log(tag: "LOG-APP: BlockedUsersView", message: "blocked user image loaded")
+                }
+                .onFailure { error in
+                    AppLogger.log(tag: "LOG-APP: BlockedUsersView", message: "blocked user image failed: \(error.localizedDescription)")
+                }
+                .indicator(.activity)
+                .transition(.opacity)
+                    .frame(width: 50, height: 50)
+                    .clipShape(Circle())
+                    .overlay(
+                        Circle()
+                            .stroke(Color("shade3"), lineWidth: 2)
+                    )
+                    .background(
+                        Image(user.Gender == "Male" ? "male" : "female")
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 50, height: 50)
+                            .clipShape(Circle())
+                    )
             }
             .buttonStyle(PlainButtonStyle())
             

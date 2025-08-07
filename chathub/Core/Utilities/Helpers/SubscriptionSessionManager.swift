@@ -103,6 +103,9 @@ class SubscriptionSessionManager: ObservableObject {
         
         defaults.synchronize()
         
+        // Reset time allocations on subscription renewal/update
+        TimeAllocationManager.shared.markSubscriptionRenewal()
+        
         // Auto-sync with SessionManager for backwards compatibility
         syncWithSessionManager()
     }
@@ -208,16 +211,65 @@ class SubscriptionSessionManager: ObservableObject {
     
     // MARK: - Tier-Specific Checkers (Android Parity)
     
-    func isUserSubscribedToLite() -> Bool {
+    /// Check if user has EXACT Lite subscription (for analytics/debugging only)
+    func isUserExactlySubscribedToLite() -> Bool {
         return isSubscriptionActive() && getSubscriptionTier().lowercased() == SubscriptionConstants.TIER_LITE
     }
     
-    func isUserSubscribedToPlus() -> Bool {
+    /// Check if user has EXACT Plus subscription (for analytics/debugging only)
+    func isUserExactlySubscribedToPlus() -> Bool {
         return isSubscriptionActive() && getSubscriptionTier().lowercased() == SubscriptionConstants.TIER_PLUS
     }
     
-    func isUserSubscribedToPro() -> Bool {
+    /// Check if user has EXACT Pro subscription (for analytics/debugging only)
+    func isUserExactlySubscribedToPro() -> Bool {
         return isSubscriptionActive() && getSubscriptionTier().lowercased() == SubscriptionConstants.TIER_PRO
+    }
+    
+    // MARK: - Tier Inheritance Checkers (CLEAR NAMING)
+    
+    /// Check if user has Lite tier access or higher (includes Lite, Plus, Pro)
+    func hasLiteTierOrHigher() -> Bool {
+        guard isSubscriptionActive() else { return false }
+        let tier = getSubscriptionTier().lowercased()
+        return tier == SubscriptionConstants.TIER_LITE || 
+               tier == SubscriptionConstants.TIER_PLUS || 
+               tier == SubscriptionConstants.TIER_PRO
+    }
+    
+    /// Check if user has Plus tier access or higher (includes Plus, Pro)
+    func hasPlusTierOrHigher() -> Bool {
+        guard isSubscriptionActive() else { return false }
+        let tier = getSubscriptionTier().lowercased()
+        return tier == SubscriptionConstants.TIER_PLUS || 
+               tier == SubscriptionConstants.TIER_PRO
+    }
+    
+    /// Check if user has Pro tier access (Pro only)
+    func hasProTier() -> Bool {
+        guard isSubscriptionActive() else { return false }
+        let tier = getSubscriptionTier().lowercased()
+        return tier == SubscriptionConstants.TIER_PRO
+    }
+    
+    // MARK: - Backward Compatibility (DEPRECATED)
+    
+    /// @deprecated Use hasLiteTierOrHigher() instead - this method name is misleading
+    @available(*, deprecated, message: "Use hasLiteTierOrHigher() instead. This method includes Plus and Pro tiers.")
+    func isUserSubscribedToLite() -> Bool {
+        return hasLiteTierOrHigher()
+    }
+    
+    /// @deprecated Use hasPlusTierOrHigher() instead - this method name is misleading  
+    @available(*, deprecated, message: "Use hasPlusTierOrHigher() instead. This method includes Pro tier.")
+    func isUserSubscribedToPlus() -> Bool {
+        return hasPlusTierOrHigher()
+    }
+    
+    /// @deprecated Use hasProTier() instead for clarity
+    @available(*, deprecated, message: "Use hasProTier() instead for better clarity.")
+    func isUserSubscribedToPro() -> Bool {
+        return hasProTier()
     }
     
     // MARK: - Grace Period Methods (Android Parity)
@@ -494,18 +546,18 @@ class SubscriptionSessionManager: ObservableObject {
     }
     
     /**
-     * Check if user has specific tier access (Android parity)
+     * Check if user has specific tier access (Android parity with tier inheritance)
      */
     func hasLiteAccess() -> Bool {
-        return hasPremiumAccess() && isUserSubscribedToLite()
+        return hasPremiumAccess() && hasLiteTierOrHigher()
     }
     
     func hasPlusAccess() -> Bool {
-        return hasPremiumAccess() && isUserSubscribedToPlus()
+        return hasPremiumAccess() && hasPlusTierOrHigher()
     }
     
     func hasProAccess() -> Bool {
-        return hasPremiumAccess() && isUserSubscribedToPro()
+        return hasPremiumAccess() && hasProTier()
     }
     
     /**

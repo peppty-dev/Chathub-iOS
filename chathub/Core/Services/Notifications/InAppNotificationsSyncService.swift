@@ -141,6 +141,8 @@ class InAppNotificationsSyncService {
         let notifsenderimage = data["notif_sender_image"] as? String ?? ""
         let notifotherid = data["notif_other_id"] as? String ?? ""
         
+
+        
         AppLogger.log(tag: "LOG-APP: \(Self.TAG)", message: "processAddedNotificationDocument() Processing notification from \(notifsendername) (type: \(notiftype))")
         
         // Filter to only process profileview notifications
@@ -177,7 +179,8 @@ class InAppNotificationsSyncService {
             AppLogger.log(tag: "LOG-APP: \(Self.TAG)", message: "processAddedNotificationDocument() Successfully wrote profileview notification to local database")
             
             // Update session manager's last notification time (Android parity)
-            sessionManager.notificationLastTime = data["notif_time"]
+            // Use document ID as timestamp since that's how notifications are stored
+            sessionManager.notificationLastTime = documenttime
             
             // Notify badge manager of new notification (Local Database → Screen)
             DispatchQueue.main.async {
@@ -288,6 +291,8 @@ class InAppNotificationsSyncService {
                     let notifSenderImage = document.get("notif_sender_image") as? String ?? ""
                     let notifOtherId = document.get("notif_other_id") as? String ?? ""
                     let notifTime = document.documentID
+                    
+
 
                     // Filter to only process profileview notifications
                     guard notifType == "profileview" else {
@@ -349,21 +354,21 @@ class InAppNotificationsSyncService {
     
     /// Get notifications from local database only (Local Database → Screen)
     func getNotificationsFromLocalDB() -> [InAppNotificationDetails] {
+        return getNotificationsFromLocalDB(limit: nil, offset: nil)
+    }
+    
+    /// Get notifications from local database with paging support (Local Database → Screen)
+    func getNotificationsFromLocalDB(limit: Int?, offset: Int?) -> [InAppNotificationDetails] {
         guard let notificationDB = DatabaseManager.shared.getNotificationDB() else {
             AppLogger.log(tag: "LOG-APP: \(Self.TAG)", message: "getNotificationsFromLocalDB() NotificationDB not available")
             return []
         }
         
-        let notifications = notificationDB.query()
-        AppLogger.log(tag: "LOG-APP: \(Self.TAG)", message: "getNotificationsFromLocalDB() Retrieved \(notifications.count) notifications from local database")
+        let notifications = notificationDB.queryWithPaging(limit: limit, offset: offset)
+        let pageInfo = limit != nil ? " (page: limit=\(limit!), offset=\(offset ?? 0))" : " (all)"
+        AppLogger.log(tag: "LOG-APP: \(Self.TAG)", message: "getNotificationsFromLocalDB() Retrieved \(notifications.count) notifications from local database\(pageInfo)")
         
-        // Debug: Log database status and query details
-        AppLogger.log(tag: "LOG-APP: \(Self.TAG)", message: "getNotificationsFromLocalDB() Database ready: \(DatabaseManager.shared.isDatabaseReady())")
-        
-        // Debug: Log first few notifications if any exist
-        for (index, notification) in notifications.prefix(3).enumerated() {
-            AppLogger.log(tag: "LOG-APP: \(Self.TAG)", message: "getNotificationsFromLocalDB() DB Notification \(index): \(notification.NotificationName) - \(notification.NotificationType)")
-        }
+
         
         return notifications
     }
@@ -386,4 +391,6 @@ class InAppNotificationsSyncService {
             AppLogger.log(tag: "LOG-APP: \(Self.TAG)", message: "markNotificationsAsSeenInLocalDB() Notified UI of seen status change")
         }
     }
+    
+
 } 

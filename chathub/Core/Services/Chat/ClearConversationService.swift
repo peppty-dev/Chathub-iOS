@@ -136,11 +136,14 @@ class ClearConversationService {
     }
     
     /// Clears conversation for a specific user - Android clearConversationForUser() equivalent
+    /// Enhanced with two-timestamp strategy for optimal message filtering
     private func clearConversationForUser(userId: String, otherUserId: String) throws {
         AppLogger.log(tag: "LOG-APP: ClearConversationService", message: "clearConversationForUser() userId: \(userId), otherUserId: \(otherUserId)")
         
+        let clearTimestamp = Int64(Date().timeIntervalSince1970 * 1000)
+        
         let messageExtraData: [String: Any] = [
-            "fetch_message_after": String(Int64(Date().timeIntervalSince1970 * 1000)),
+            "fetch_message_after": String(clearTimestamp),
             "conversation_deleted": true,
             "last_message_timestamp": FieldValue.serverTimestamp()
         ]
@@ -163,6 +166,12 @@ class ClearConversationService {
         
         if let error = writeError {
             throw error
+        }
+        
+        // 🎯 Update local timestamp for two-timestamp strategy optimization
+        if userId == sessionManager.userId {
+            sessionManager.setChatFetchMessageAfter(otherUserId: otherUserId, timestamp: clearTimestamp)
+            AppLogger.log(tag: "LOG-APP: ClearConversationService", message: "clearConversationForUser() Updated local fetch_message_after timestamp: \(clearTimestamp)")
         }
         
         AppLogger.log(tag: "LOG-APP: ClearConversationService", message: "clearConversationForUser() completed for userId: \(userId)")

@@ -6,7 +6,7 @@ struct GetMoreRepliesPopupView: View {
     var body: some View {
         ZStack {
             // Background overlay - dark semi-transparent tap to dismiss (following guidelines)
-            Color.black.opacity(0.4)
+            Color.black.opacity(0.6)
                 .ignoresSafeArea()
                 .onTapGesture {
                     AppLogger.log(tag: "LOG-APP: GetMoreRepliesPopupView", message: "backgroundTapped() Dismissing popup")
@@ -97,8 +97,11 @@ struct GetMoreRepliesPopupView: View {
                 .frame(maxWidth: .infinity)
                 .background(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .fill(Color("Background Color"))
-                        .shadow(color: Color.black.opacity(0.1), radius: 10, x: 0, y: 5)
+                        .fill(Color("shade2"))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                        )
                 )
                 .padding(.horizontal, 24)
                 .transition(.scale.combined(with: .opacity))

@@ -217,13 +217,32 @@ class InAppNotificationDB {
         }
     }
     
+
+    
     func query() -> [InAppNotificationDetails] {
+        return queryWithPaging(limit: nil, offset: nil)
+    }
+    
+    /// Query notifications with paging support (Android parity)
+    func queryWithPaging(limit: Int? = 20, offset: Int? = 0) -> [InAppNotificationDetails] {
+        AppLogger.log(tag: "LOG-APP: NotificationDB", message: "queryWithPaging() - ENTRY: limit=\(limit?.description ?? "nil"), offset=\(offset?.description ?? "nil")")
+        
         guard DatabaseManager.shared.isDatabaseReady() else {
-            AppLogger.log(tag: "LOG-APP: NotificationDB", message: "query() - Database not ready")
+            AppLogger.log(tag: "LOG-APP: NotificationDB", message: "queryWithPaging() - Database not ready")
             return []
         }
-            
-            let queryStatementString = "SELECT * FROM Notification ORDER BY notif_time DESC"
+        
+        var queryStatementString = "SELECT * FROM Notification ORDER BY notif_time DESC"
+        
+        // Add LIMIT and OFFSET for paging if specified
+                if let limit = limit {
+            queryStatementString += " LIMIT \(limit)"
+            if let offset = offset, offset > 0 {
+queryStatementString += " OFFSET \(offset)"
+            }
+        }
+        
+        AppLogger.log(tag: "LOG-APP: NotificationDB", message: "queryWithPaging() - Executing SQL: \(queryStatementString)")
             
             let result = DatabaseManager.shared.executeReadQuery(
                 sql: queryStatementString,
@@ -232,15 +251,49 @@ class InAppNotificationDB {
                 var notifications: [InAppNotificationDetails] = []
                 
                 while sqlite3_step(statement) == SQLITE_ROW {
-                    // Extract data using Android parity column indices
-                    let notifType = String(cString: sqlite3_column_text(statement, 1))
-                    let notifSenderName = String(cString: sqlite3_column_text(statement, 2))
-                    let notifSenderId = String(cString: sqlite3_column_text(statement, 3))
-                    let notifSenderGender = String(cString: sqlite3_column_text(statement, 4))
-                    let notifSenderImage = String(cString: sqlite3_column_text(statement, 5))
-                    let notifOtherId = String(cString: sqlite3_column_text(statement, 6))
+                    // Extract data using Android parity column indices with proper UTF-8 handling
+                    func getSafeString(from statement: OpaquePointer?, column: Int32) -> String {
+                        guard let cString = sqlite3_column_text(statement, column) else { return "" }
+                        
+                        let stringValue = String(cString: cString)
+                        
+                        // Validate UTF-8 and filter out corrupted data - less restrictive
+                        guard !stringValue.isEmpty,
+                              !stringValue.contains("\0") else {
+                            AppLogger.log(tag: "LOG-APP: NotificationDB", message: "getSafeString() - Filtered corrupted string data from column \(column): '\(stringValue.debugDescription)'")
+                            return ""
+                        }
+                        
+                        // Log what we're returning for debugging
+                        if column <= 3 { // Only log first few columns to avoid spam
+                            AppLogger.log(tag: "LOG-APP: NotificationDB", message: "getSafeString() - Column \(column): '\(stringValue)' (length: \(stringValue.count))")
+                        }
+                        
+                        return stringValue
+                    }
+                    
+                    let notifType = getSafeString(from: statement, column: 1)
+                    let notifSenderName = getSafeString(from: statement, column: 2)
+                    let notifSenderId = getSafeString(from: statement, column: 3)
+                    let notifSenderGender = getSafeString(from: statement, column: 4)
+                    let notifSenderImage = getSafeString(from: statement, column: 5)
+                    let notifOtherId = getSafeString(from: statement, column: 6)
                     let notifTime = String(sqlite3_column_int64(statement, 7))
                     let notifSeen = sqlite3_column_int(statement, 8) == 1
+                    
+
+                    
+                    // Debug log the extracted data before creating notification object
+                    AppLogger.log(tag: "LOG-APP: NotificationDB", message: "queryWithPaging() - Creating notification from DB data:")
+                    AppLogger.log(tag: "LOG-APP: NotificationDB", message: "  Raw Type: '\(notifType)' (length: \(notifType.count))")
+                    AppLogger.log(tag: "LOG-APP: NotificationDB", message: "  Raw Name: '\(notifSenderName)' (length: \(notifSenderName.count))")
+                    AppLogger.log(tag: "LOG-APP: NotificationDB", message: "  Raw ID: '\(notifSenderId)' (length: \(notifSenderId.count))")
+                    
+                    // Check if data is valid before creating notification
+                    if notifType.isEmpty && notifSenderName.isEmpty && notifSenderId.isEmpty {
+                        AppLogger.log(tag: "LOG-APP: NotificationDB", message: "queryWithPaging() - WARNING: All critical fields are empty, skipping notification")
+                        continue
+                    }
                     
                     let notification = InAppNotificationDetails(
                         NotificationName: notifSenderName,
@@ -253,9 +306,12 @@ class InAppNotificationDB {
                         NotificationSeen: notifSeen
                     )
                     notifications.append(notification)
+                    AppLogger.log(tag: "LOG-APP: NotificationDB", message: "queryWithPaging() - Successfully created and added notification #\(notifications.count)")
                 }
                 
-                AppLogger.log(tag: "LOG-APP: NotificationDB", message: "query() - Successfully retrieved \(notifications.count) notifications")
+                let limitStr = limit != nil ? "limit: \(limit!)" : "no limit"
+                let offsetStr = offset != nil ? "offset: \(offset!)" : "no offset"
+                AppLogger.log(tag: "LOG-APP: NotificationDB", message: "queryWithPaging() - Retrieved \(notifications.count) notifications (\(limitStr), \(offsetStr))")
                 return notifications
             }
             
@@ -263,7 +319,7 @@ class InAppNotificationDB {
             case .success(let notifications):
                 return notifications
             case .failure(let error):
-                AppLogger.log(tag: "LOG-APP: NotificationDB", message: "query() - Failed to execute query: \(error)")
+                AppLogger.log(tag: "LOG-APP: NotificationDB", message: "queryWithPaging() - Failed to execute query: \(error)")
                 return []
             }
     }
@@ -309,12 +365,13 @@ class InAppNotificationDB {
                 var updateStatement: OpaquePointer?
                 
                 if sqlite3_prepare_v2(db, updateQuery, -1, &updateStatement, nil) == SQLITE_OK {
-                    sqlite3_bind_text(updateStatement, 1, notifType, -1, nil)
-                    sqlite3_bind_text(updateStatement, 2, notifSenderName, -1, nil)
-                    sqlite3_bind_text(updateStatement, 3, notifSenderId, -1, nil)
-                    sqlite3_bind_text(updateStatement, 4, notifSenderGender, -1, nil)
-                    sqlite3_bind_text(updateStatement, 5, notifSenderImage, -1, nil)
-                    sqlite3_bind_text(updateStatement, 6, notifOtherId, -1, nil)
+                    // Use UTF-8 encoding for all text parameters to prevent corruption
+                    sqlite3_bind_text(updateStatement, 1, (notifType as NSString).utf8String, -1, nil)
+                    sqlite3_bind_text(updateStatement, 2, (notifSenderName as NSString).utf8String, -1, nil)
+                    sqlite3_bind_text(updateStatement, 3, (notifSenderId as NSString).utf8String, -1, nil)
+                    sqlite3_bind_text(updateStatement, 4, (notifSenderGender as NSString).utf8String, -1, nil)
+                    sqlite3_bind_text(updateStatement, 5, (notifSenderImage as NSString).utf8String, -1, nil)
+                    sqlite3_bind_text(updateStatement, 6, (notifOtherId as NSString).utf8String, -1, nil)
                     sqlite3_bind_int(updateStatement, 7, notifSeen ? 1 : 0)
                     sqlite3_bind_int(updateStatement, 8, existingId)
                     
@@ -337,14 +394,18 @@ class InAppNotificationDB {
                 var insertStatement: OpaquePointer?
                 
                 if sqlite3_prepare_v2(db, insertQuery, -1, &insertStatement, nil) == SQLITE_OK {
-                    sqlite3_bind_text(insertStatement, 1, notifType, -1, nil)
-                    sqlite3_bind_text(insertStatement, 2, notifSenderName, -1, nil)
-                    sqlite3_bind_text(insertStatement, 3, notifSenderId, -1, nil)
-                    sqlite3_bind_text(insertStatement, 4, notifSenderGender, -1, nil)
-                    sqlite3_bind_text(insertStatement, 5, notifSenderImage, -1, nil)
-                    sqlite3_bind_text(insertStatement, 6, notifOtherId, -1, nil)
+                    // Use UTF-8 encoding for all text parameters to prevent corruption
+                    sqlite3_bind_text(insertStatement, 1, (notifType as NSString).utf8String, -1, nil)
+                    sqlite3_bind_text(insertStatement, 2, (notifSenderName as NSString).utf8String, -1, nil)
+                    sqlite3_bind_text(insertStatement, 3, (notifSenderId as NSString).utf8String, -1, nil)
+                    sqlite3_bind_text(insertStatement, 4, (notifSenderGender as NSString).utf8String, -1, nil)
+                    sqlite3_bind_text(insertStatement, 5, (notifSenderImage as NSString).utf8String, -1, nil)
+                    sqlite3_bind_text(insertStatement, 6, (notifOtherId as NSString).utf8String, -1, nil)
                     sqlite3_bind_int64(insertStatement, 7, notifTime)
                     sqlite3_bind_int(insertStatement, 8, notifSeen ? 1 : 0)
+                    
+                    AppLogger.log(tag: "LOG-APP: NotificationDB", message: "insert() - Inserting notification with data:")
+                    AppLogger.log(tag: "LOG-APP: NotificationDB", message: "  Type: '\(notifType)', Name: '\(notifSenderName)', ID: '\(notifSenderId)'")
                     
                     if sqlite3_step(insertStatement) == SQLITE_DONE {
                         AppLogger.log(tag: "LOG-APP: NotificationDB", message: "insert() - Successfully inserted notification: \(notifSenderId)")
@@ -486,22 +547,7 @@ class InAppNotificationDB {
             }
     }
 
-    // DEPRECATED: Legacy method for backward compatibility
-    func insert(DocumentTime : String, NotificationName: String, NotificationId: String, NotificationType: String, NotificationGender: String, NotificationImage: String) {
-        AppLogger.log(tag: "LOG-APP: NotificationDB", message: "insert() - DEPRECATED: Using legacy insert method, converting to new format")
-        
-        let notifTime = Int64(DocumentTime) ?? Int64(Date().timeIntervalSince1970)
-        insert(
-            notifType: NotificationType,
-            notifSenderName: NotificationName,
-            notifSenderId: NotificationId,
-            notifSenderGender: NotificationGender,
-            notifSenderImage: NotificationImage,
-            notifOtherId: "",
-            notifTime: notifTime,
-            notifSeen: false
-        )
-    }
+    // REMOVED: Legacy insert method - use the new insert method with proper parameters instead
 
 	func extractInt32(from string: String) -> Int32 {
 	  let numbersString = string.components(separatedBy: CharacterSet.alphanumerics.inverted)

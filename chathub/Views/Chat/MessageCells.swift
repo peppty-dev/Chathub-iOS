@@ -1,4 +1,5 @@
 import SwiftUI
+import SDWebImageSwiftUI
 
 // MARK: - Shared Gradient Background Component
 /**
@@ -717,25 +718,25 @@ struct ProfileImageView: View {
     let size: CGFloat
     
     var body: some View {
-        Group {
-            if imageUrl == "null" || imageUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if imageUrl == "null" || imageUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            Image(gender == "Male" ? "male" : "female")
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: size, height: size)
+                .clipped()
+        } else {
+            WebImage(url: URL(string: imageUrl.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")) { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } placeholder: {
                 Image(gender == "Male" ? "male" : "female")
                     .resizable()
                     .aspectRatio(contentMode: .fill)
-            } else {
-                AsyncImage(url: URL(string: imageUrl.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")) { image in
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                } placeholder: {
-                    Image(gender == "Male" ? "male" : "female")
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                }
             }
+            .frame(width: size, height: size)
+            .clipped()
         }
-        .frame(width: size, height: size)
-        .clipped()
     }
 }
 

@@ -142,8 +142,8 @@ class SubscriptionRepository {
                 AppLogger.log(tag: "LOG-APP: SubscriptionRepository", message: "saveFullSubscriptionState() Adding to background sync queue")
                 SubscriptionSyncQueue.shared.addPendingUpdate(subscriptionData)
                 
-                // Trigger immediate background sync attempt
-                BackgroundTaskManager.shared.executeImmediateSubscriptionSync()
+                // REMOVED: Background task execution - SubscriptionListenerManager handles real-time sync
+                // The queue system remains for retry logic, but background tasks are unnecessary
                 
             } else {
                 AppLogger.log(tag: "LOG-APP: SubscriptionRepository", message: "saveFullSubscriptionState() Immediate sync successful for userId=\(userId)")
@@ -187,8 +187,8 @@ class SubscriptionRepository {
                 AppLogger.log(tag: "LOG-APP: SubscriptionRepository", message: "triggerInactiveStateUpdate() Adding inactive update to background sync queue")
                 SubscriptionSyncQueue.shared.addPendingUpdate(inactiveData)
                 
-                // Trigger immediate background sync attempt
-                BackgroundTaskManager.shared.executeImmediateSubscriptionSync()
+                // REMOVED: Background task execution - SubscriptionListenerManager handles real-time sync
+                // The queue system remains for retry logic, but background tasks are unnecessary
                 
             } else {
                 AppLogger.log(tag: "LOG-APP: SubscriptionRepository", message: "triggerInactiveStateUpdate() Immediate inactive sync successful for userId=\(userId)")
@@ -375,7 +375,9 @@ class SubscriptionRepository {
         AppLogger.log(tag: "LOG-APP: SubscriptionRepository", message: "forceBackgroundSync() Forcing background sync for \(queueSize) pending updates")
         
         if queueSize > 0 {
-            BackgroundTaskManager.shared.executeImmediateSubscriptionSync()
+            // REMOVED: Background task execution - SubscriptionListenerManager handles real-time sync
+            // The queue system remains for retry logic, but manual background forcing is unnecessary
+            AppLogger.log(tag: "LOG-APP: SubscriptionRepository", message: "forceBackgroundSync() Background tasks removed - SubscriptionListenerManager handles real-time sync")
         }
     }
 } 

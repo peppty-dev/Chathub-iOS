@@ -376,12 +376,14 @@ struct LoginWithCredentialsView: View {
         userSessionManager.userId = data["User_id"] as? String
         userSessionManager.userName = data["User_name"] as? String
         
-        if let userAge = data["User_age"] as? String, let age = Int(userAge) {
-            userSessionManager.filterMinAge = String(age)
-        }
+        // FIXED: Don't set filter values during login - these are user profile data, not filter preferences
+        // Filter values should only be set when user explicitly applies filters
+        // User profile data is stored separately and doesn't affect online user filtering
         
-        userSessionManager.filterGender = data["User_gender"] as? String
-        userSessionManager.filterCountry = data["User_country"] as? String
+        // Store user profile data (not filter data)
+        userSessionManager.userAge = data["User_age"] as? String
+        userSessionManager.userGender = data["User_gender"] as? String
+        userSessionManager.userCountry = data["User_country"] as? String
         userSessionManager.userLanguage = data["User_language"] as? String
         userSessionManager.emailAddress = data["User_email"] as? String
         userSessionManager.deviceId = data["User_device_id"] as? String

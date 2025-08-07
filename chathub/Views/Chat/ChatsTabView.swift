@@ -4,6 +4,7 @@ import FirebaseCrashlytics
 import UIKit
 import Foundation
 import FirebaseAuth
+import SDWebImageSwiftUI
 
 // MARK: - Notification Names for Real-Time Database Updates (Android LiveData equivalent)
 extension Notification.Name {
@@ -201,13 +202,7 @@ struct ChatsTabView: View {
             inboxTabButton
         }
         .padding(4)
-        .background(
-            LinearGradient(
-                colors: [Color("shade1"), Color("shade2")],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-        )
+        .background(Color("shade1"))
         .clipShape(RoundedRectangle(cornerRadius: 12))
     }
     
@@ -532,43 +527,52 @@ struct ChatRowView: View {
     
     var body: some View {
             Button(action: onTap) {
-                HStack(spacing: 12) {
-                    // Profile Image
-                    AsyncImage(url: URL(string: chat.ProfileImage)) { image in
+                HStack(spacing: 0) {
+                    // Profile Image - matching DiscoverTabView sizing and positioning
+                    WebImage(url: URL(string: chat.ProfileImage)) { image in
                         image
                             .resizable()
                             .aspectRatio(contentMode: .fill)
                     } placeholder: {
-                    Image(chat.Gender.lowercased() == "female" ? "female" : "male")
+                        Image(chat.Gender.lowercased() == "female" ? "female" : "male")
                             .resizable()
                             .aspectRatio(contentMode: .fill)
                     }
-                .frame(width: 60, height: 60)
-                    .clipShape(Circle())
+                    .indicator(.activity)
+                    .transition(.opacity)
+                        .frame(width: 65, height: 65) // Increased to match DiscoverTabView
+                        .clipShape(Circle())
+                        .padding(.leading, 15) // Matching DiscoverTabView
+                        .padding(.top, 10) // Matching DiscoverTabView
+                        .padding(.bottom, 10) // Matching DiscoverTabView
                     
-                // Chat Content
-                VStack(alignment: .leading, spacing: 5) {
+                // Chat Content - centered vertically
+                VStack(alignment: .leading, spacing: 4) {
+                    Spacer() // Top spacer for vertical centering
+                    
                     // Username
-                            Text(Profanity.share.removeProfanityNumbersAllowed(chat.Name))
+                    Text(Profanity.share.removeProfanityNumbersAllowed(chat.Name))
                         .font(.system(size: 16, weight: .medium))
-                                .foregroundColor(Color("dark"))
+                        .foregroundColor(Color("dark"))
                         .lineLimit(1)
                     
                     // Last message/time
                     Text(formatLastMessage(chat))
-                        .font(.system(size: 13, weight: formatLastMessage(chat).hasPrefix("New Message") ? .bold : .medium))
-                        .foregroundColor(formatLastMessage(chat).hasPrefix("New Message") ? Color("Red1") : Color("shade_600"))
-                                .lineLimit(2)
+                        .font(.system(size: 13, weight: getMessageFontWeight(for: chat)))
+                        .foregroundColor(getMessageColor(for: chat))
+                        .lineLimit(2)
+                    
+                    Spacer() // Bottom spacer for vertical centering
                 }
+                .padding(.leading, 20) // Matching DiscoverTabView content padding
+                .padding(.trailing, 15) // Matching DiscoverTabView content padding
                             
-                            Spacer()
+                Spacer()
                             
                 // Chat Type Icon
-                    getChatTypeIcon(for: chat)
+                getChatTypeIcon(for: chat)
+                    .padding(.trailing, 20) // Matching DiscoverTabView trailing padding
                 }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 15)
-            .frame(minHeight: 85)
             .contentShape(Rectangle())
             }
             .buttonStyle(PlainButtonStyle())
@@ -582,9 +586,55 @@ struct ChatRowView: View {
     }
     
     private func formatLastMessage(_ chat: Chat) -> String {
-        let prefix = chat.newmessage ? "New Message" : "Message"
+        let currentUserId = UserSessionManager.shared.userId ?? ""
+        
+        // Determine if the last message was sent or received by current user
+        let wasSentByCurrentUser: Bool
+        if let lastMessageSentByUserId = chat.lastMessageSentByUserId, !lastMessageSentByUserId.isEmpty {
+            // Use the Android parity field if available
+            wasSentByCurrentUser = (lastMessageSentByUserId == currentUserId)
+        } else if !chat.Lastsentby.isEmpty {
+            // Fallback to checking Lastsentby field
+            wasSentByCurrentUser = (chat.Lastsentby == currentUserId)
+        } else {
+            // If no sender info available, assume received for safety
+            wasSentByCurrentUser = false
+        }
+        
+        // Create appropriate prefix based on sent/received status
+        let prefix: String
+        if wasSentByCurrentUser {
+            // Message was sent by current user
+            prefix = "Sent"
+        } else {
+            // Message was received from other user
+            prefix = chat.newmessage ? "New Message" : "Received"
+        }
+        
         let timeString = formatChatTime(chat.LastTimeStamp)
         return "\(prefix) · \(timeString)"
+    }
+    
+    private func getMessageFontWeight(for chat: Chat) -> Font.Weight {
+        let messageText = formatLastMessage(chat)
+        
+        // Bold for new messages, medium for everything else
+        if messageText.hasPrefix("New Message") {
+            return .bold
+        } else {
+            return .medium
+        }
+    }
+    
+    private func getMessageColor(for chat: Chat) -> Color {
+        let messageText = formatLastMessage(chat)
+        
+        // Only new messages get red color, everything else is gray
+        if messageText.hasPrefix("New Message") {
+            return Color("Red1")  // Red for new messages only
+        } else {
+            return Color("shade_600")  // Gray for all other messages (sent/received)
+        }
     }
     
     private func formatChatTime(_ date: Date) -> String {

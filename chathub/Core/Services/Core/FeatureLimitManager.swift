@@ -70,8 +70,8 @@ class BaseFeatureLimitManager: FeatureLimitManager {
     }
     
     func canPerformAction() -> Bool {
-        // Plus subscription users bypass all limits
-        if subscriptionSessionManager.isUserSubscribedToPlus() {
+        // Plus+ subscription users bypass all limits
+        if subscriptionSessionManager.hasPlusTierOrHigher() {
             return true
         }
         

@@ -19,13 +19,18 @@ struct ConversationLimitPopupView: View {
     
     @ObservedObject private var subscriptionsManager = SubscriptionsManagerStoreKit2.shared
     
+    // When SB is active, reuse this view with the same title but with a different description
+    // and hide the Start button while showing timer + Subscribe button.
+    var isShadowBan: Bool = false
+
     init(isPresented: Binding<Bool>, 
          remainingCooldown: TimeInterval,
          isLimitReached: Bool,
          currentUsage: Int,
          limit: Int,
          onStartConversation: @escaping () -> Void,
-         onUpgradeToPremium: @escaping () -> Void) {
+          onUpgradeToPremium: @escaping () -> Void,
+          isShadowBan: Bool = false) {
         self._isPresented = isPresented
         self.remainingCooldown = remainingCooldown
         self.isLimitReached = isLimitReached
@@ -33,6 +38,7 @@ struct ConversationLimitPopupView: View {
         self.limit = limit
         self.onStartConversation = onStartConversation
         self.onUpgradeToPremium = onUpgradeToPremium
+        self.isShadowBan = isShadowBan
         self._remainingTime = State(initialValue: remainingCooldown)
         
         // Set total cooldown duration based on configuration
@@ -69,7 +75,10 @@ struct ConversationLimitPopupView: View {
                 
                 // Description
                 Group {
-                    if isLimitReached && remainingTime > 0 {
+                    if isShadowBan {
+                        // SB description (title unchanged). Encourage Plus to chat instantly.
+                        Text("You promoted other apps. You can start new conversations after the timer ends. Subscribe to Plus to chat instantly.")
+                    } else if isLimitReached && remainingTime > 0 {
                         Text("You've used your \(limit) free conversations. Subscribe to ChatHub Plus for unlimited conversations and discover more people!")
                     } else {
                         Text("Start new conversations to meet interesting people! Subscribe to ChatHub Plus for unlimited conversations.")
@@ -82,7 +91,7 @@ struct ConversationLimitPopupView: View {
                 .padding(.top, 12)
                 
                 // Progress bar and timer (only show during cooldown)
-                if isLimitReached && remainingTime > 0 {
+                if (isLimitReached && remainingTime > 0) || isShadowBan {
                     VStack(spacing: 8) {
                         // Progress bar
                         GeometryReader { geometry in
@@ -120,8 +129,8 @@ struct ConversationLimitPopupView: View {
                 
                 // Buttons
                 VStack(spacing: 12) {
-                    // Start Conversation Button - only show when not in cooldown
-                    if !(isLimitReached && remainingTime > 0) {
+                    // Start Conversation Button - hidden for SB while timer active
+                    if !(isShadowBan || (isLimitReached && remainingTime > 0)) {
                         Button(action: startConversationAction) {
                             HStack(spacing: 0) {
                                 // Left side - icon and text (always consistent)
@@ -374,13 +383,21 @@ struct ConversationLimitPopupView: View {
         // Invalidate existing timer to prevent duplicates
         countdownTimer?.invalidate()
         
+        // UI Timer: Update every 0.1 seconds for smooth animation (like other limit popups)
         countdownTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
-            let newRemainingTime = ConversationLimitManagerNew.shared.getRemainingCooldown()
-            if newRemainingTime <= 0.1 { // Use a small tolerance for UI update
-                remainingTime = 0
-                // Do not dismiss popup, let it transition to available state
+            if remainingTime > 0.1 {
+                remainingTime -= 0.1
             } else {
-                remainingTime = newRemainingTime
+                remainingTime = 0
+                stopCountdownTimer()
+                
+                // Reset the usage count when cooldown expires
+                ConversationLimitManagerNew.shared.resetConversationUsage()
+                
+                // Don't dismiss popup - let it transition to available state
+                // The UI will automatically show the conversation button and hide progress bar
+                // based on remainingTime = 0 condition
+                AppLogger.log(tag: "LOG-APP: ConversationLimitPopupView", message: "Timer expired - transitioning popup to available state")
             }
         }
     }

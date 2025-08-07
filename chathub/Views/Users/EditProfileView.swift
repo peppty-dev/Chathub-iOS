@@ -1,6 +1,7 @@
 import SwiftUI
 import FirebaseFirestore
 import PhotosUI
+import SDWebImageSwiftUI
 
 struct ProfileField {
     let title: String
@@ -789,72 +790,40 @@ struct ProfileHeaderSection: View {
                                 .frame(width: 160, height: 160)
                                 .clipShape(Circle())
                         } else {
-                            AsyncImage(url: URL(string: profileImage)) { phase in
-                                switch phase {
-                                case .empty:
-                                    ProgressView()
-                                        .frame(width: 160, height: 160)
-                                        .clipShape(Circle())
-                                case .success(let image):
-                                    image
+                            WebImage(url: URL(string: profileImage)) { image in
+                                image
+                                    .resizable()
+                                    .aspectRatio(contentMode: .fill)
+                            } placeholder: {
+                                ZStack {
+                                    Circle()
+                                        .fill(
+                                            LinearGradient(
+                                                colors: [
+                                                    Color("shade3"),
+                                                    Color("shade4")
+                                                ],
+                                                startPoint: .topLeading,
+                                                endPoint: .bottomTrailing
+                                            )
+                                        )
+                                    
+                                    Image(UserSessionManager.shared.userGender == "Male" ? "male" : "female")
                                         .resizable()
                                         .aspectRatio(contentMode: .fill)
-                                        .frame(width: 160, height: 160)
-                                        .clipShape(Circle())
-                                        .onAppear {
-                                            AppLogger.log(tag: "LOG-APP: EditProfileView", message: "profile image loaded")
-                                        }
-                                case .failure(let error):
-                                    ZStack {
-                                        // Gradient background for placeholder (matching ProfileView)
-                                        Circle()
-                                            .fill(
-                                                LinearGradient(
-                                                    colors: [
-                                                        Color("shade3"),
-                                                        Color("shade4")
-                                                    ],
-                                                    startPoint: .topLeading,
-                                                    endPoint: .bottomTrailing
-                                                )
-                                            )
-                                        
-                                        Image(gender == "Male" ? "male" : "female")
-                                            .resizable()
-                                            .aspectRatio(contentMode: .fill)
-                                            .frame(width: 160, height: 160)
-                                            .clipShape(Circle())
-                                    }
-                                    .frame(width: 160, height: 160)
-                                    .clipShape(Circle())
-                                    .onAppear {
-                                        AppLogger.log(tag: "LOG-APP: EditProfileView", message: "profile image loading failed: \(error.localizedDescription)")
-                                    }
-                                @unknown default:
-                                    ZStack {
-                                        // Gradient background for placeholder (matching ProfileView)
-                                        Circle()
-                                            .fill(
-                                                LinearGradient(
-                                                    colors: [
-                                                        Color("shade3"),
-                                                        Color("shade4")
-                                                    ],
-                                                    startPoint: .topLeading,
-                                                    endPoint: .bottomTrailing
-                                                )
-                                            )
-                                        
-                                        Image(gender == "Male" ? "male" : "female")
-                                            .resizable()
-                                            .aspectRatio(contentMode: .fill)
-                                            .frame(width: 160, height: 160)
-                                            .clipShape(Circle())
-                                    }
-                                    .frame(width: 160, height: 160)
-                                    .clipShape(Circle())
+                                        .opacity(0.8)
                                 }
+                                .frame(width: 160, height: 160)
+                                .clipShape(Circle())
                             }
+                            .onSuccess { image, data, cacheType in
+                                AppLogger.log(tag: "LOG-APP: EditProfileView", message: "profile image loaded from \(cacheType == .memory ? "memory" : cacheType == .disk ? "disk" : "network")")
+                            }
+                            .onFailure { error in
+                                AppLogger.log(tag: "LOG-APP: EditProfileView", message: "profile image loading failed: \(error.localizedDescription)")
+                            }
+                            .frame(width: 160, height: 160)
+                            .clipShape(Circle())
                         }
                         
                         // Enhanced border with gradient effect (matching ProfileView exactly)

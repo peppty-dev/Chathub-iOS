@@ -66,7 +66,7 @@ class BackgroundTimerManager {
         checkRefreshCooldown()
         checkFilterCooldown()
         checkSearchCooldown()
-        // Add other feature checks as needed
+        checkConversationCooldown()
         
         let afterState = "inCooldown: \(refreshManager.isInCooldown()), remaining: \(refreshManager.getRemainingCooldown())s, usage: \(refreshManager.getCurrentUsageCount())"
         AppLogger.log(tag: "LOG-APP: BackgroundTimerManager", message: "checkAllCooldowns() AFTER refresh check - \(afterState)")
@@ -80,10 +80,12 @@ class BackgroundTimerManager {
         let refreshWasInCooldown = RefreshLimitManager.shared.isInCooldown()
         let filterWasInCooldown = FilterLimitManager.shared.isInCooldown()
         let searchWasInCooldown = SearchLimitManager.shared.isInCooldown()
+        let conversationWasInCooldown = ConversationLimitManagerNew.shared.isInCooldown()
         
         checkRefreshCooldown()
         checkFilterCooldown() 
         checkSearchCooldown()
+        checkConversationCooldown()
         
         // Check if anything was reset
         if refreshWasInCooldown && !RefreshLimitManager.shared.isInCooldown() {
@@ -94,6 +96,9 @@ class BackgroundTimerManager {
         }
         if searchWasInCooldown && !SearchLimitManager.shared.isInCooldown() {
             resetFeatures.append("search")
+        }
+        if conversationWasInCooldown && !ConversationLimitManagerNew.shared.isInCooldown() {
+            resetFeatures.append("conversation")
         }
         
         if !resetFeatures.isEmpty {
@@ -307,6 +312,34 @@ class BackgroundTimerManager {
         }
     }
     
+    private func checkConversationCooldown() {
+        let manager = ConversationLimitManagerNew.shared
+        
+        // CRITICAL FIX: Check cooldown state more robustly to handle precision issues
+        let cooldownStart = manager.getCooldownStartTime()
+        
+        if cooldownStart > 0 {
+            let currentTime = Int64(Date().timeIntervalSince1970)
+            let elapsed = currentTime - cooldownStart
+            let cooldownDuration = manager.getCooldownDuration()
+            let remaining = max(0, cooldownDuration - TimeInterval(elapsed))
+            
+            // Fix: Use tolerance of 1 second to handle timing precision issues
+            if remaining <= 1.0 {
+                AppLogger.log(tag: "LOG-APP: BackgroundTimerManager", message: "Conversation cooldown expired in background - auto-resetting (remaining: \(remaining)s)")
+                manager.resetCooldown()
+                
+                // Notify UI about expiration
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: Self.conversationCooldownExpiredNotification, object: nil)
+                    NotificationCenter.default.post(name: Self.anyFeatureCooldownExpiredNotification, object: "conversation")
+                }
+            } else {
+                AppLogger.log(tag: "LOG-APP: BackgroundTimerManager", message: "Conversation cooldown active - \(remaining)s remaining")
+            }
+        }
+    }
+    
     // MARK: - Precise Expiration Timers
     
     /// Set up precise timers that fire exactly when cooldowns expire
@@ -408,6 +441,10 @@ extension BackgroundTimerManager {
         
         if SearchLimitManager.shared.isInCooldown() {
             summary["search"] = SearchLimitManager.shared.getRemainingCooldown()
+        }
+        
+        if ConversationLimitManagerNew.shared.isInCooldown() {
+            summary["conversation"] = ConversationLimitManagerNew.shared.getRemainingCooldown()
         }
         
         return summary

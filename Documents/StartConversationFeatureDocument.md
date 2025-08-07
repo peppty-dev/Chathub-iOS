@@ -8,13 +8,131 @@ The ChatHub iOS Start Conversation Feature is a sophisticated freemium monetizat
 
 **Technical Architecture**: Built on ConversationLimitManagerNew for limit management with always-show popup strategy, ChatFlowManager for conversation creation and matching algorithms, SessionManager for unified configuration persistence, BackgroundTimerManager for real-time cooldown processing, ConversationAnalytics for comprehensive user behavior tracking, and Firebase integration for conversation routing and storage. Features precision timer system with millisecond-accurate cooldown expiration, dual-timer UI architecture matching refresh/filter/search popups, conversation matching algorithms, and complete analytics coverage.
 
-## 1. Overview
+## 1. Step-by-Step Conversation Limit Flow
+
+This section provides a complete step-by-step breakdown of how the conversation limit popup system works from user interaction to completion.
+
+### **STEP 1: User Action**
+- User taps **"Start Conversation"** button on ProfileView
+
+### **STEP 2: Check Existing Conversation**
+- System checks if conversation already exists with this user
+- ✅ **Existing**: Navigate directly to MessagesView, no limits
+- ❌ **New**: Continue to limit checking
+
+### **STEP 3: Check Conversation Limits**
+- System calls `ConversationLimitManagerNew.shared.checkConversationLimit()`
+- Performs 6-layer validation (detailed below)
+
+### **STEP 4: Validation Layer 1 - Auto-Reset Check**
+- Check if cooldown expired globally
+- ✅ **Expired**: Auto-reset count to 0 → Allow conversation, no popup
+- ❌ **Active**: Continue validation
+
+### **STEP 5: Validation Layer 2 - Plus Subscription**
+- Check `subscriptionSessionManager.hasPlusAccess()`
+- ✅ **Plus+ User**: Bypass all limits → Allow conversation, no popup
+- ❌ **Free User**: Continue validation
+
+### **STEP 6: Validation Layer 3 - New User Grace**
+- Check if user is in new user free period
+- ✅ **New User**: Bypass limits → Allow conversation, no popup
+- ❌ **Regular User**: Continue validation
+
+### **STEP 7: Validation Layer 4 - Usage Count**
+- Get current conversation count: `getCurrentUsageCount()`
+- Get limit from config: `getLimit()` (e.g., 3 conversations)
+- Check: `currentUsage >= limit`
+
+### **STEP 8: Validation Layer 5 - Fresh Reset**
+- If auto-reset just happened in Step 4
+- ✅ **Just Reset**: Allow immediate conversation, no popup
+- ❌ **No Reset**: Continue to decision
+
+### **STEP 9: Decision Point**
+- **Always-Show Strategy**: Always show popup for non-Plus/non-new users
+- **Shadow Ban Enforcement**: If Text Moderation Shadow Ban (SB) is active, popup is shown in SB mode
+- Display ConversationLimitPopupView with countdown and subscription options (SB uses same title, different description, no Start button)
+
+### **STEP 10: Popup Content**
+- **Title**: "Start Conversation" (unchanged)
+- **Description**:
+  - Normal: Current usage and limit information
+  - SB Mode: "You promoted other apps. You can start new conversations after the timer ends. Subscribe to Plus to chat instantly."
+- **Progress Bar**: Plus gradient countdown timer (shown during limit cooldown or SB)
+- **Buttons**:
+  - Normal: "Start Conversation" + "Subscribe to Plus"
+  - SB Mode: Only "Subscribe to Plus" (Start button hidden)
+- **Usage Display**: "X of Y conversations used" (hidden in SB mode)
+
+### **STEP 11: Popup Timer System**
+- **UI Timer**: Updates every 0.1 seconds
+- **SB Duration**: Fetched from AppSettings (`textModerationSBLockDurationSeconds`) and stored in UserDefaults; used across checks
+- **Background Timer**: Safety check every 1 second
+- **Progress Bar**: Animates countdown visually
+
+### **STEP 12: User Interaction**
+- **Option A**: User taps "Start conversation" → Proceed if within limits
+- **Option B**: User taps "Subscribe to Plus" → Navigate to subscription
+- **Option C**: User taps background → Dismiss popup
+- **Option D**: User waits → Timer counts down
+
+### **STEP 13A: CONVERSATION ALLOWED PATH**
+- If within limits (`currentUsage < limit`):
+- Call `ConversationLimitManagerNew.shared.performConversation()`
+- Increment usage count: `currentUsage + 1`
+- Start cooldown if limit reached
+- Create conversation and navigate to MessagesView
+- Track analytics: `trackConversationSuccessful()`
+
+### **STEP 13B: CONVERSATION BLOCKED PATH**
+- If limit reached (`currentUsage >= limit`):
+- Show "Limit reached" message in popup
+- User must wait for cooldown or subscribe
+- Track analytics: `trackConversationBlocked()`
+
+### **STEP 14: Timer Expiration**
+- When countdown reaches 0:
+- Call `resetCooldown()` globally
+- Set conversation count back to 0
+- Update popup UI to allow fresh conversations
+- User can now start conversations again
+
+### **STEP 15: Reset Mechanism**
+- **What Resets**: Global conversation count (not per-user)
+- **When**: Only when cooldown time expires
+- **Storage**: `UserDefaults` global keys
+- **Security**: Cannot be bypassed by app restart
+
+### **STEP 16: Global Usage Tracking**
+```
+All conversations count toward single global limit:
+Conversation 1: Count = 1/3
+Conversation 2: Count = 2/3
+Conversation 3: Count = 3/3 (Limit reached - show wait message)
+Conversation 4: Blocked until cooldown expires
+```
+
+### **STEP 17: Analytics Tracking**
+- Track popup shown: `trackConversationLimitPopupShown()`
+- Track button taps: `trackSubscriptionButtonTapped()`
+- Track popup dismissals: `trackPopupDismissed()`
+- Track conversation success/blocked: `trackConversationSuccessful()/trackConversationBlocked()`
+
+### **🎯 Quick Summary**
+1. **Start Button** → 2. **Check Existing** → 3. **6-Layer Validation** → 4. **Always Show Popup** → 5. **User Choice** → 6. **Allow/Block Conversation** → 7. **Timer/Reset** → 8. **Fresh Conversations**
+
+**Key Point**: Conversation limits are **global** and only apply to **new conversations**!
+
+---
+
+## 2. Overview
 
 This document describes the **current implementation** of the Start Conversation Feature in the ChatHub iOS application. The feature allows users to initiate conversations with other users, implementing a freemium model with usage limits for non-Plus users and unlimited access for Plus subscribers.
 
 **✅ Feature Parity Status**: The Start Conversation Feature maintains **perfect architectural parity** with the Refresh, Filter, and Search features, implementing the same always-show popup strategy, UI design patterns, and business logic while providing unique conversation-specific functionality.
 
-### 1.1 Feature Status
+### 2.1 Feature Status
 
 **Current Status**: ✅ **Fully Operational** - All conversation creation functionality is working correctly with complete parity with other limit-based features.
 
@@ -1061,6 +1179,23 @@ var freeConversationsCooldownSeconds: Int {
 - **Subscription Model**: Clarified Plus subscription as the unlock requirement for unlimited conversations
 - **Error Resolution**: Documented all build fixes and their solutions for future reference
 - **Bug Fix Documentation**: Added comprehensive analysis of double counting issue and resolution
+
+### 14.6 🚨 CRITICAL BACKGROUND TIMER FIX (Latest)
+- **Critical Bug Identified**: Conversation cooldowns were not being checked by BackgroundTimerManager, causing timers to restart when app was closed/reopened
+- **User Impact**: Users who closed the app or dismissed the popup would see fresh "5:00" timers instead of recognizing expired cooldowns
+- **Root Cause**: BackgroundTimerManager was missing `checkConversationCooldown()` method and conversation checks in `checkAllCooldowns()`
+- **Technical Problem**: Unlike refresh, filter, and search features, conversation cooldowns were not monitored during app lifecycle events
+- **Solution Applied**:
+  - **BackgroundTimerManager Enhancement**: Added `checkConversationCooldown()` method with same precision timing as other features
+  - **checkAllCooldowns() Update**: Now includes `checkConversationCooldown()` call alongside refresh, filter, and search
+  - **getCooldownSummary() Update**: Now includes conversation cooldowns in summary report
+  - **checkAllCooldownsWithReport() Update**: Now tracks and reports conversation cooldown resets
+  - **Notification Integration**: Posts `conversationCooldownExpiredNotification` when cooldowns expire in background
+- **App Lifecycle Coverage**:
+  - **App Backgrounded → Resumed**: `appWillEnterForeground()` → `checkAllCooldowns()` → includes conversation check ✅
+  - **App Closed → Reopened**: `didFinishLaunchingWithOptions()` → `checkAllCooldowns()` → includes conversation check ✅
+  - **Popup Dismissed**: Background timer continues monitoring and auto-resets when expired ✅
+- **Expected Behavior**: Conversation cooldowns now properly expire in background and reset automatically, matching refresh/filter/search behavior
 
 ## Summary
 

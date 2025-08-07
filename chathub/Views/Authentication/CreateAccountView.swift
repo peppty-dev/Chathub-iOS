@@ -2,6 +2,7 @@ import SwiftUI
 import FirebaseCore
 import FirebaseAuth
 import FirebaseFirestore
+import SDWebImageSwiftUI
 
 // MARK: - Create Account View (matching Android EmailVerificationActivity exactly)
 struct CreateAccountView: View {
@@ -634,9 +635,9 @@ struct AccountSettingsView: View {
     private var accountProfileSection: some View {
         HStack(spacing: 20) {
             // Profile Photo (matching Android profile_photo)
-                            if let profilePhotoURL = UserSessionManager.shared.userProfilePhoto,
+            if let profilePhotoURL = UserSessionManager.shared.userProfilePhoto,
                let url = URL(string: profilePhotoURL), !profilePhotoURL.isEmpty {
-                AsyncImage(url: url) { image in
+                WebImage(url: url) { image in
                     image
                         .resizable()
                         .aspectRatio(contentMode: .fill)
@@ -644,10 +645,27 @@ struct AccountSettingsView: View {
                     Image(UserSessionManager.shared.userGender == "Male" ? "male_icon" : "Female_icon")
                         .resizable()
                         .aspectRatio(contentMode: .fill)
+                        .frame(width: 52, height: 52)
+                        .clipShape(Circle())
                 }
-                .frame(width: 52, height: 52)
-                .clipShape(Circle())
-                .overlay(Circle().stroke(Color.clear, lineWidth: 2))
+                .onSuccess { image, data, cacheType in
+                    // Profile image loaded successfully
+                }
+                .onFailure { error in
+                    // Profile image loading failed
+                }
+                .indicator(.activity)
+                .transition(.opacity)
+                    .frame(width: 52, height: 52)
+                    .clipShape(Circle())
+                    .overlay(Circle().stroke(Color.clear, lineWidth: 2))
+                    .background(
+                        Image(UserSessionManager.shared.userGender == "Male" ? "male_icon" : "Female_icon")
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 52, height: 52)
+                            .clipShape(Circle())
+                    )
             } else {
                 Image(UserSessionManager.shared.userGender == "Male" ? "male_icon" : "Female_icon")
                     .resizable()

@@ -32,19 +32,22 @@ class ChatFlowManager {
     
     private init() {}
     
-    // MARK: - Main Algorithm (Android Parity)
-    func startAlgorithm(
+    // MARK: - Inbox Routing Decision Flow (Lite Check + Compatibility Algorithm)
+    func executeInboxRoutingDecision(
         otherUserId: String,
         otherUserName: String,
         otherUserGender: String,
         otherUserCountry: String,
         otherUserImage: String,
         otherUserDevId: String,
+        otherUserAge: String = "",
+        otherUserLanguage: String = "",
         callback: ChatFlowCallback
     ) {
-        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "startAlgorithm() d_other_user_id = \(otherUserId) d_other_user_name \(otherUserName) d_other_user_gender \(otherUserGender) d_other_user_country \(otherUserCountry) d_other_user_image \(otherUserImage) d_other_user_dev_id \(otherUserDevId)")
+        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "executeInboxRoutingDecision() STARTING ROUTING DECISION FLOW")
+        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "executeInboxRoutingDecision() d_other_user_id = \(otherUserId) d_other_user_name \(otherUserName) d_other_user_gender \(otherUserGender) d_other_user_country \(otherUserCountry) d_other_user_image \(otherUserImage) d_other_user_dev_id \(otherUserDevId)")
         
-        // Gender matching logic (matching Android)
+        // STEP 1: Gender compatibility analysis
         var alGenderMatch = true
         var myGender = true
         var otherUserGenderBool = true
@@ -65,7 +68,7 @@ class ChatFlowManager {
             alGenderMatch = false
         }
         
-        // Country matching logic (matching Android)
+        // STEP 2: Country matching logic (matching Android)
         var alCountryMatch: Bool
         let myCountry: String
         if let retrievedCountry = sessionManager.userRetrievedCountry, retrievedCountry != "null" {
@@ -79,44 +82,236 @@ class ChatFlowManager {
         }
         alCountryMatch = myCountry.lowercased() == otherUserCountry.lowercased()
         
-        // Text moderation matching logic (matching Android)
-        var alTextModerationMatch = false
-        let myTextModerationScore = moderationSettingsManager.hiveTextModerationScore
-        let otherUserTextModerationScore: Int = 0 // Would need to be fetched from user profile
-        
-        if myTextModerationScore < otherUserTextModerationScore {
-            alTextModerationMatch = true
+        // STEP 3: Age matching logic (NEW)
+        var alAgeMatch = true
+        if let myAge = sessionManager.userAge, let myAgeInt = Int(myAge),
+           let otherAgeInt = Int(otherUserAge) {
+            // Define age compatibility range (±5 years for example)
+            let ageCompatibilityRange = 5
+            let ageDifference = abs(myAgeInt - otherAgeInt)
+            if ageDifference > ageCompatibilityRange {
+                alAgeMatch = false
+            }
         }
         
-        // Calculate coins based on matching factors (matching Android)
-        var coins = 2
-        if !alCountryMatch {
-            AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "startAlgorithm() country not matched")
-            coins += 1
+        // STEP 4: Language matching logic (NEW)
+        var alLanguageMatch = true
+        if let myLanguage = sessionManager.userLanguage, !myLanguage.isEmpty,
+           !otherUserLanguage.isEmpty, myLanguage != "null", otherUserLanguage != "null" {
+            alLanguageMatch = myLanguage.lowercased() == otherUserLanguage.lowercased()
         }
         
-        if !alGenderMatch {
-            AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "startAlgorithm() gender not matched")
-            coins += 1
+        // STEP 5: LITE SUBSCRIPTION CHECK (Priority Check)
+        // If user has Lite subscription or higher, skip algorithm entirely
+        let subscriptionSessionManager = SubscriptionSessionManager.shared
+        let hasLiteOrHigher = subscriptionSessionManager.hasLiteTierOrHigher()
+        
+        if hasLiteOrHigher {
+            AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "executeInboxRoutingDecision() User has Lite+ subscription - bypassing algorithm")
+            
+            // Log routing decision for Lite+ users
+            ConversationFlowLogger.shared.logRoutingDecision(
+                flowId: "FLOW_ACTIVE",
+                decision: RoutingDecision(toInbox: false, isPaid: true),
+                userType: subscriptionSessionManager.hasProTier() ? .pro : 
+                          subscriptionSessionManager.hasPlusTierOrHigher() ? .plus : .lite,
+                bypassReason: "Lite+ subscription bypass"
+            )
+            
+            // Lite+ users always go to direct chat (same as Premium users)
+            createChatWithRouting(
+                otherUserId: otherUserId,
+                otherUserName: otherUserName,
+                otherUserGender: otherUserGender,
+                otherUserImage: otherUserImage,
+                otherUserDevId: otherUserDevId,
+                inBox: false,  // Always direct chat for Lite+ users
+                paid: true,    // Lite+ users are paid subscribers
+                callback: callback
+            )
+            return
         }
         
-        if !alTextModerationMatch {
-            AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "startAlgorithm() text moderation not matched")
-            coins += 1
-        }
+        // STEP 6: RUN COMPATIBILITY ALGORITHM (Free Users Only)
+        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "executeInboxRoutingDecision() Running compatibility algorithm for FREE user")
         
-        // Since limits are now handled at UI level, proceed directly to chat creation
-        createChat(
+        // Create compatibility factors for structured logging
+        let userAge = Int(sessionManager.userAge ?? "0") ?? 0
+        let otherAge = Int(otherUserAge) ?? 0
+        let compatibilityFactors = CompatibilityFactors(
+            userCountry: myCountry,
+            otherCountry: otherUserCountry,
+            countryMatch: alCountryMatch,
+            userGender: myGender ? "Male" : "Female",
+            otherGender: otherUserGenderBool ? "Male" : "Female",
+            genderMatch: alGenderMatch,
+            userAge: userAge,
+            otherAge: otherAge,
+            ageMatch: alAgeMatch,
+            userLanguage: sessionManager.userLanguage ?? "Unknown",
+            otherLanguage: otherUserLanguage,
+            languageMatch: alLanguageMatch
+        )
+        
+        let algorithmResult = calculateCompatibilityScore(
+            myGender: myGender,
+            otherUserGenderBool: otherUserGenderBool,
+            alGenderMatch: alGenderMatch,
+            alCountryMatch: alCountryMatch,
+            alAgeMatch: alAgeMatch,
+            alLanguageMatch: alLanguageMatch
+        )
+        
+        // Log algorithm execution with detailed factors
+        let compatibilityResult = CompatibilityResult(
+            mismatchCount: algorithmResult.mismatchCount,
+            details: algorithmResult.details
+        )
+        
+        ConversationFlowLogger.shared.logAlgorithmExecution(
+            flowId: "FLOW_ACTIVE", // Will be enhanced to pass actual flowId
+            factors: compatibilityFactors,
+            result: compatibilityResult
+        )
+        
+        // STEP 7: APPLY ROUTING DECISION
+        let shouldGoToInbox = algorithmResult.mismatchCount >= 3
+        
+        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "executeInboxRoutingDecision() ROUTING DECISION: inBox=\(shouldGoToInbox) (Mismatches: \(algorithmResult.mismatchCount), Threshold: 3)")
+        
+        // Log routing decision
+        ConversationFlowLogger.shared.logRoutingDecision(
+            flowId: "FLOW_ACTIVE",
+            decision: RoutingDecision(toInbox: shouldGoToInbox, isPaid: false),
+            userType: .free,
+            bypassReason: nil
+        )
+        
+        // Proceed to chat creation with algorithm-based routing decision
+        createChatWithRouting(
             otherUserId: otherUserId,
             otherUserName: otherUserName,
             otherUserGender: otherUserGender,
             otherUserImage: otherUserImage,
             otherUserDevId: otherUserDevId,
+            inBox: shouldGoToInbox,  // Algorithm decision based on compatibility
+            paid: false,  // Free users are always non-paid
             callback: callback
         )
     }
     
-    // MARK: - Simplified Chat Creation (New System)
+    // MARK: - Compatibility Algorithm (Pure Calculation)
+    private func calculateCompatibilityScore(
+        myGender: Bool,
+        otherUserGenderBool: Bool,
+        alGenderMatch: Bool,
+        alCountryMatch: Bool,
+        alAgeMatch: Bool,
+        alLanguageMatch: Bool
+    ) -> (mismatchCount: Int, details: [String: Bool]) {
+        
+        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "calculateCompatibilityScore() STARTING COMPATIBILITY ALGORITHM")
+        
+        var mismatchCount = 0
+        var details: [String: Bool] = [:]
+        
+        // Factor 1: Country Compatibility
+        if !alCountryMatch {
+            AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "calculateCompatibilityScore() ❌ Country mismatch")
+            mismatchCount += 1
+            details["country"] = false
+        } else {
+            AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "calculateCompatibilityScore() ✅ Country match")
+            details["country"] = true
+        }
+        
+        // Factor 2: Gender Compatibility
+        if !alGenderMatch {
+            AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "calculateCompatibilityScore() ❌ Gender mismatch (Male→Female)")
+            mismatchCount += 1
+            details["gender"] = false
+        } else {
+            AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "calculateCompatibilityScore() ✅ Gender match")
+            details["gender"] = true
+        }
+        
+        // Factor 3: Age Compatibility
+        if !alAgeMatch {
+            AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "calculateCompatibilityScore() ❌ Age mismatch (>5 years difference)")
+            mismatchCount += 1
+            details["age"] = false
+        } else {
+            AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "calculateCompatibilityScore() ✅ Age match (≤5 years difference)")
+            details["age"] = true
+        }
+        
+        // Factor 4: Language Compatibility
+        if !alLanguageMatch {
+            AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "calculateCompatibilityScore() ❌ Language mismatch")
+            mismatchCount += 1
+            details["language"] = false
+        } else {
+            AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "calculateCompatibilityScore() ✅ Language match")
+            details["language"] = true
+        }
+        
+        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "calculateCompatibilityScore() ALGORITHM COMPLETE: \(mismatchCount)/4 mismatches")
+        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "calculateCompatibilityScore() Compatibility: \(4-mismatchCount)/4 factors matched")
+        
+        return (mismatchCount: mismatchCount, details: details)
+    }
+    
+    // MARK: - Enhanced Chat Creation with Routing (New System)
+    func createChatWithRouting(
+        otherUserId: String,
+        otherUserName: String,
+        otherUserGender: String,
+        otherUserImage: String,
+        otherUserDevId: String,
+        inBox: Bool,
+        paid: Bool,
+        callback: ChatFlowCallback
+    ) {
+        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "createChatWithRouting() Starting chat creation with routing: inBox=\(inBox), paid=\(paid)")
+        
+        checkOldOrNewChat(
+            otherUserId: otherUserId,
+            otherUserName: otherUserName,
+            otherUserGender: otherUserGender,
+            otherUserImage: otherUserImage,
+            otherUserDevId: otherUserDevId,
+            inBox: inBox,
+            paid: paid,
+            callback: callback
+        )
+    }
+    
+    // MARK: - Direct Chat Creation (Premium/New Users - NO Algorithm)
+    func createDirectChat(
+        otherUserId: String,
+        otherUserName: String,
+        otherUserGender: String,
+        otherUserImage: String,
+        otherUserDevId: String,
+        isPremiumUser: Bool,
+        callback: ChatFlowCallback
+    ) {
+        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "createDirectChat() Direct chat creation - bypassing algorithm (Premium: \(isPremiumUser))")
+        
+        // Direct chat creation without algorithm - always goes to direct chat list
+        checkOldOrNewChat(
+            otherUserId: otherUserId,
+            otherUserName: otherUserName,
+            otherUserGender: otherUserGender,
+            otherUserImage: otherUserImage,
+            otherUserDevId: otherUserDevId,
+            inBox: false,  // Always direct chat for premium/new users
+            paid: isPremiumUser,
+            callback: callback
+        )
+    }
+    
+    // MARK: - Legacy Chat Creation (Backward Compatibility)
     func createChat(
         otherUserId: String,
         otherUserName: String,
@@ -125,9 +320,9 @@ class ChatFlowManager {
         otherUserDevId: String,
         callback: ChatFlowCallback
     ) {
-        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "createChat() Starting chat creation process")
+        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "createChat() Starting legacy chat creation process")
         
-        // Simply proceed to create the chat since limits are now handled at UI level
+        // For backward compatibility, use default routing
         checkOldOrNewChat(
             otherUserId: otherUserId,
             otherUserName: otherUserName,

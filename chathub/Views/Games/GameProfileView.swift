@@ -1,4 +1,5 @@
 import SwiftUI
+import SDWebImageSwiftUI
 
 struct GameDetail: Identifiable {
     let id: UUID
@@ -50,48 +51,28 @@ struct GameProfileView: View {
     
     @ViewBuilder
     private func coverImageView() -> some View {
-        AsyncImage(url: URL(string: game.gameCover.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")) { phase in
-            switch phase {
-            case .empty:
-                Rectangle()
-                    .fill(Color.gray.opacity(0.3))
-                    .overlay(
-                        ProgressView()
-                            .foregroundColor(.white)
-                    )
-                    .frame(height: 300)
-            case .success(let image):
-                image
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(height: 300)
-                    .clipped()
-                    .onAppear {
-                        AppLogger.log(tag: "LOG-APP: GameProfileView", message: "setupGameProfile() Game cover loaded for \(game.gameName)")
-                    }
-            case .failure(let error):
-                Rectangle()
-                    .fill(Color.gray.opacity(0.3))
-                    .overlay(
-                        VStack {
-                            Image(systemName: "gamecontroller.fill")
-                                .font(.system(size: 60))
-                                .foregroundColor(.white)
-                            Text("Game Cover")
-                                .font(.caption)
-                                .foregroundColor(.white)
-                        }
-                    )
-                    .frame(height: 300)
-                    .onAppear {
-                        AppLogger.log(tag: "LOG-APP: GameProfileView", message: "setupGameProfile() Game cover failed for \(game.gameName): \(error.localizedDescription)")
-                    }
-            @unknown default:
-                Rectangle()
-                    .fill(Color.gray.opacity(0.3))
-                    .frame(height: 300)
-            }
+WebImage(url: URL(string: game.gameCover.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? ""))
+        { image in
+            image
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+        } placeholder: {
+            Rectangle()
+                .fill(Color.gray.opacity(0.3))
+                .overlay(
+                    ProgressView()
+                        .foregroundColor(.white)
+                )
+                .frame(height: 300)
         }
+        .onSuccess { image, data, cacheType in
+            AppLogger.log(tag: "LOG-APP: GameProfileView", message: "setupGameProfile() Game cover loaded for \(game.gameName)")
+        }
+        .onFailure { error in
+            AppLogger.log(tag: "LOG-APP: GameProfileView", message: "setupGameProfile() Game cover failed for \(game.gameName): \(error.localizedDescription)")
+        }
+        .frame(height: 300)
+        .clipped()
     }
     
     var body: some View {

@@ -15,6 +15,12 @@ class DiscoverTabViewModel: ObservableObject {
     @Published var showSearchResults: Bool = false // Controls which RecyclerView equivalent to show
     @Published var notificationsLoaded: Bool = false
     
+    // Paging support for notifications
+    @Published var isLoadingMore: Bool = false
+    @Published var hasMoreNotifications: Bool = true
+    private let notificationsPageSize = 20
+    private var currentNotificationsOffset = 0
+    
     // Use specialized session managers instead of monolithic SessionManager
     private var userSessionManager = UserSessionManager.shared
     private var appSettingsSessionManager = AppSettingsSessionManager.shared
@@ -45,49 +51,134 @@ class DiscoverTabViewModel: ObservableObject {
         // Load notifications from local database
         loadNotificationsFromLocalDB()
         
-        // Listen for notification data changes
+        // Listen for notification data changes with debouncing to prevent refresh loops
         NotificationCenter.default.publisher(for: .notificationDataChanged)
+            .debounce(for: .milliseconds(500), scheduler: DispatchQueue.main)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                AppLogger.log(tag: "LOG-APP: DiscoverView", message: "setupNotificationListener() - Notification data changed, refreshing")
+                AppLogger.log(tag: "LOG-APP: DiscoverView", message: "setupNotificationListener() - Notification data changed, refreshing after debounce")
                 self?.loadNotificationsFromLocalDB()
             }
             .store(in: &cancellables)
-        
-        // Mark notifications as loaded
-        markNotificationsLoaded()
     }
     
     func loadNotificationsFromLocalDB() {
-        AppLogger.log(tag: "LOG-APP: DiscoverView", message: "loadNotificationsFromLocalDB() - Loading notifications from local database")
+        AppLogger.log(tag: "LOG-APP: DiscoverView", message: "loadNotificationsFromLocalDB() - Loading first page of notifications")
         
-        // Get notifications from local database via sync service
-        let localNotifications = InAppNotificationsSyncService.shared.getNotificationsFromLocalDB()
+        // Reset paging for fresh load
+        currentNotificationsOffset = 0
+        hasMoreNotifications = true
         
-        AppLogger.log(tag: "LOG-APP: DiscoverView", message: "loadNotificationsFromLocalDB() - Retrieved \(localNotifications.count) notifications from sync service")
+        // Get first page of notifications (both seen and unseen)
+        let localNotifications = InAppNotificationsSyncService.shared.getNotificationsFromLocalDB(
+            limit: notificationsPageSize, 
+            offset: currentNotificationsOffset
+        )
         
-        // Debug: Log each notification
-        for (index, notification) in localNotifications.enumerated() {
-            AppLogger.log(tag: "LOG-APP: DiscoverView", message: "loadNotificationsFromLocalDB() - Notification \(index): \(notification.NotificationName) - \(notification.NotificationType) - \(notification.NotificationTime)")
-        }
+        AppLogger.log(tag: "LOG-APP: DiscoverView", message: "loadNotificationsFromLocalDB() - Retrieved \(localNotifications.count) notifications (first page)")
         
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
             
-            let supportedTypes = InAppNotificationDetails.NotificationType.allCases.map { $0.rawValue }
-            let filteredNotifications = localNotifications.filter { supportedTypes.contains($0.NotificationType) }
+            // Show ALL notifications without any type filtering
+            let allNotifications = localNotifications
             
-            self.notifications = filteredNotifications
+            AppLogger.log(tag: "LOG-APP: DiscoverView", message: "loadNotificationsFromLocalDB() - Displaying all \(allNotifications.count) notifications without filtering")
+            
+            if localNotifications.count > 0 {
+                let firstNotif = localNotifications.first!
+                AppLogger.log(tag: "LOG-APP: DiscoverView", message: "loadNotificationsFromLocalDB() - First notification details:")
+                AppLogger.log(tag: "LOG-APP: DiscoverView", message: "  Type: '\(firstNotif.NotificationType)'")
+                AppLogger.log(tag: "LOG-APP: DiscoverView", message: "  Name: '\(firstNotif.NotificationName)'")
+                AppLogger.log(tag: "LOG-APP: DiscoverView", message: "  ID: '\(firstNotif.NotificationId)'")
+                AppLogger.log(tag: "LOG-APP: DiscoverView", message: "  Gender: '\(firstNotif.NotificationGender)'")
+                AppLogger.log(tag: "LOG-APP: DiscoverView", message: "  Image: '\(firstNotif.NotificationImage)'")
+                AppLogger.log(tag: "LOG-APP: DiscoverView", message: "  Time: '\(firstNotif.NotificationTime)'")
+                AppLogger.log(tag: "LOG-APP: DiscoverView", message: "  Seen: \(firstNotif.NotificationSeen)")
+            }
+            
+            // Store first page of notifications (both seen and unseen)
+            self.notifications = allNotifications
+            self.currentNotificationsOffset = allNotifications.count
+            
+            // Check if we have more notifications to load
+            self.hasMoreNotifications = allNotifications.count == self.notificationsPageSize
+            
+            // Mark notifications as loaded and then check empty state
+            self.notificationsLoaded = true
             self.showEmptyStateIfNeeded()
             
-            AppLogger.log(tag: "LOG-APP: DiscoverView", message: "loadNotificationsFromLocalDB() - Updated UI with \(localNotifications.count) notifications")
-            AppLogger.log(tag: "LOG-APP: DiscoverView", message: "loadNotificationsFromLocalDB() - showEmptyState: \(self.showEmptyState), notificationsLoaded: \(self.notificationsLoaded)")
+            AppLogger.log(tag: "LOG-APP: DiscoverView", message: "loadNotificationsFromLocalDB() - Displaying \(allNotifications.count) notifications, hasMore: \(self.hasMoreNotifications)")
+        }
+    }
+    
+    func loadMoreNotifications() {
+        guard hasMoreNotifications && !isLoadingMore else {
+            AppLogger.log(tag: "LOG-APP: DiscoverView", message: "loadMoreNotifications() - Skipped (hasMore: \(hasMoreNotifications), isLoading: \(isLoadingMore))")
+            return
+        }
+        
+        AppLogger.log(tag: "LOG-APP: DiscoverView", message: "loadMoreNotifications() - Loading more notifications from offset \(currentNotificationsOffset)")
+        
+        isLoadingMore = true
+        
+        // Get next page of notifications
+        let localNotifications = InAppNotificationsSyncService.shared.getNotificationsFromLocalDB(
+            limit: notificationsPageSize, 
+            offset: currentNotificationsOffset
+        )
+        
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            
+            // Show ALL notifications without any type filtering
+            let newNotifications = localNotifications
+            
+            // Append new notifications to existing ones
+            self.notifications.append(contentsOf: newNotifications)
+            self.currentNotificationsOffset += newNotifications.count
+            
+            // Check if we have more notifications to load
+            self.hasMoreNotifications = newNotifications.count == self.notificationsPageSize
+            self.isLoadingMore = false
+            
+            AppLogger.log(tag: "LOG-APP: DiscoverView", message: "loadMoreNotifications() - Added \(newNotifications.count) notifications, total: \(self.notifications.count), hasMore: \(self.hasMoreNotifications)")
         }
     }
     
     func markNotificationsLoaded() {
         notificationsLoaded = true
         showEmptyStateIfNeeded()
+    }
+    
+    /// Initial load method that checks if data is needed (like OnlineUsersViewModel pattern)
+    func initialLoadIfNeeded() {
+        AppLogger.log(tag: "LOG-APP: DiscoverTabViewModel", message: "initialLoadIfNeeded() checking if notifications load is needed")
+        
+        // Check if we already have notifications data
+        if notifications.isEmpty {
+            AppLogger.log(tag: "LOG-APP: DiscoverTabViewModel", message: "initialLoadIfNeeded() no notifications in memory, loading from database/Firebase")
+            setupInitialData()
+        } else {
+            AppLogger.log(tag: "LOG-APP: DiscoverTabViewModel", message: "initialLoadIfNeeded() already have \\(notifications.count) notifications in memory, skipping reload")
+        }
+    }
+    
+    /// Setup initial data (like the old setupView method but without forcing refresh every time)
+    private func setupInitialData() {
+        AppLogger.log(tag: "LOG-APP: DiscoverTabViewModel", message: "setupInitialData() Setting up initial notifications data")
+        
+        // Load all notifications from local database (both seen and unseen) - instant display
+        loadNotificationsFromLocalDB()
+        markNotificationsLoaded()
+        
+        // Only refresh from Firebase if we have no data or very few notifications
+        if notifications.count < 5 {
+            AppLogger.log(tag: "LOG-APP: DiscoverTabViewModel", message: "setupInitialData() Few or no notifications, refreshing from Firebase")
+            refreshNotifications()
+        } else {
+            AppLogger.log(tag: "LOG-APP: DiscoverTabViewModel", message: "setupInitialData() Have \\(notifications.count) notifications, skipping Firebase refresh")
+        }
     }
     
     func refreshNotifications() {
@@ -107,11 +198,13 @@ class DiscoverTabViewModel: ObservableObject {
         }
     }
     
+
+    
     // MARK: - Helper Methods
     
     private func showEmptyStateIfNeeded() {
         if showSearchResults {
-            // In search mode
+            // In search mode - show empty state if no search results
             if searchResults.isEmpty && !isLoading {
                 showEmptyState = true
                 emptyStateMessage = "No user found\nPlease try with different username"
@@ -119,14 +212,16 @@ class DiscoverTabViewModel: ObservableObject {
                 showEmptyState = false
             }
         } else {
-            // In notifications mode
+            // In notifications mode - show empty state if no notifications exist
             if notifications.isEmpty && notificationsLoaded {
                 showEmptyState = true
-                emptyStateMessage = "No new notification\nNew notification will appear here"
+                emptyStateMessage = "No notifications yet\nNotifications will appear here"
             } else {
                 showEmptyState = false
             }
         }
+        
+        AppLogger.log(tag: "LOG-APP: DiscoverView", message: "showEmptyStateIfNeeded() - Mode: \(showSearchResults ? "search" : "notifications"), showEmptyState: \(showEmptyState), items: \(showSearchResults ? searchResults.count : notifications.count)")
     }
     
     // MARK: - Search Functionality (Android Parity)

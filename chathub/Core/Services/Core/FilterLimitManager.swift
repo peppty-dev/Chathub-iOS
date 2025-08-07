@@ -78,16 +78,16 @@ class FilterLimitManager: BaseFeatureLimitManager {
         let limit = getLimit()
         let remainingCooldown = getRemainingCooldown()
         
-        // Check if user can proceed without popup (Lite subscribers and new users)
-        let isLiteSubscriber = subscriptionSessionManager.isUserSubscribedToLite()
+        // Check if user can proceed without popup (Lite+ subscribers and new users)
+        let hasLiteAccess = subscriptionSessionManager.hasLiteTierOrHigher()
         let isNewUserInFreePeriod = isNewUser()
         
         // Debug logging to understand user categorization
-        AppLogger.log(tag: "LOG-APP: FilterLimitManager", message: "checkFilterLimit() - isLiteSubscriber: \(isLiteSubscriber), isNewUser: \(isNewUserInFreePeriod), currentUsage: \(currentUsage), limit: \(limit), wasAutoReset: \(wasAutoReset)")
+        AppLogger.log(tag: "LOG-APP: FilterLimitManager", message: "checkFilterLimit() - hasLiteAccess: \(hasLiteAccess), isNewUser: \(isNewUserInFreePeriod), currentUsage: \(currentUsage), limit: \(limit), wasAutoReset: \(wasAutoReset)")
         
-        // Lite subscribers and new users bypass popup entirely
-        if isLiteSubscriber || isNewUserInFreePeriod {
-            AppLogger.log(tag: "LOG-APP: FilterLimitManager", message: "checkFilterLimit() - User bypassing popup (Lite: \(isLiteSubscriber), New: \(isNewUserInFreePeriod))")
+        // Lite+ subscribers and new users bypass popup entirely
+        if hasLiteAccess || isNewUserInFreePeriod {
+            AppLogger.log(tag: "LOG-APP: FilterLimitManager", message: "checkFilterLimit() - User bypassing popup (LiteOrHigher: \(hasLiteAccess), New: \(isNewUserInFreePeriod))")
             return FeatureLimitResult(
                 canProceed: true,
                 showPopup: false,

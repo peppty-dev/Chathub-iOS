@@ -54,11 +54,18 @@ struct SubscriptionConstants {
     static let KEY_PERIOD = "period"
     static let KEY_PLAN_ID = "planId"
     
-    // MARK: - Time limits for different tiers
+    // MARK: - Time limits for different tiers (in seconds)
     static let LITE_TIME_LIMIT = 14400  // 4 hours
     static let PLUS_TIME_LIMIT = 28800  // 8 hours
     static let UNLIMITED_TIME = Int.max
     static let NO_TIME = 0
+    
+    // MARK: - Live Call Time Limits (per subscription period)
+    static let PLUS_LIVE_TIME_LIMIT = 18000  // 18,000 seconds (5 hours)
+    static let PRO_LIVE_TIME_LIMIT = 18000   // 18,000 seconds (5 hours)
+    
+    // MARK: - Voice/Video Call Time Limits (per subscription period)
+    static let PRO_CALL_TIME_LIMIT = 18000   // 18,000 seconds (5 hours)
     
     // MARK: - Price display formats
     static let WEEKLY_PRICE_FORMAT = "%@%.0f"
@@ -138,6 +145,23 @@ struct SubscriptionConstants {
         case TIER_PLUS: return PLUS_SUBSCRIPTION_ID
         case TIER_PRO: return PRO_SUBSCRIPTION_ID
         default: return nil
+        }
+    }
+    
+    /// Gets live call time limit based on subscription tier
+    static func getLiveTimeLimit(tier: String) -> Int {
+        switch tier.lowercased() {
+        case TIER_PLUS: return PLUS_LIVE_TIME_LIMIT
+        case TIER_PRO: return PRO_LIVE_TIME_LIMIT
+        default: return NO_TIME
+        }
+    }
+    
+    /// Gets voice/video call time limit based on subscription tier
+    static func getCallTimeLimit(tier: String) -> Int {
+        switch tier.lowercased() {
+        case TIER_PRO: return PRO_CALL_TIME_LIMIT
+        default: return NO_TIME
         }
     }
     

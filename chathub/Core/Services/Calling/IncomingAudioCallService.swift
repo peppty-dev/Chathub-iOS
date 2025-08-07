@@ -189,6 +189,12 @@ class IncomingAudioCallService: NSObject, ObservableObject {
             // Update session manager
             self.sessionManager.callSeconds = self.countDown
             
+            // Track time consumption in TimeAllocationManager for Pro subscribers
+            let subscriptionManager = SubscriptionSessionManager.shared
+            if subscriptionManager.hasProTier() {
+                TimeAllocationManager.shared.consumeCallTime(seconds: 1)
+            }
+            
             if self.countDown <= 0 {
                 self.delegate?.deleteListenerAndLeaveChannel()
             }

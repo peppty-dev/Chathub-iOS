@@ -1,5 +1,6 @@
 import SwiftUI
 import FirebaseFirestore
+import SDWebImageSwiftUI
 
 struct MyProfileView: View {
     @State private var userDetails: [String] = []
@@ -37,30 +38,21 @@ struct MyProfileView: View {
                         showPhotoViewer = true
                     }
                 }) {
-                    let profileImageView = AsyncImage(url: URL(string: profileImage.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")) { phase in
-                        switch phase {
-                        case .empty:
-                            ProgressView()
-                                .frame(width: 120, height: 120)
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .onAppear {
-                                    AppLogger.log(tag: "LOG-APP: MyProfileView", message: "profileImage loaded successfully")
-                                }
-                        case .failure(let error):
-                            Image(gender == "Male" ? "male" : "female")
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .onAppear {
-                                    AppLogger.log(tag: "LOG-APP: MyProfileView", message: "profileImage loading failed: \(error.localizedDescription)")
-                                }
-                        @unknown default:
-                            Image(gender == "Male" ? "male" : "female")
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                        }
+                    WebImage(url: URL(string: profileImage.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")) { image in
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        Image(gender == "Male" ? "male" : "female")
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 120, height: 120)
+                    }
+                    .onSuccess { image, data, cacheType in
+                        AppLogger.log(tag: "LOG-APP: MyProfileView", message: "profileImage loaded successfully from \(cacheType == .memory ? "memory" : cacheType == .disk ? "disk" : "network")")
+                    }
+                    .onFailure { error in
+                        AppLogger.log(tag: "LOG-APP: MyProfileView", message: "profileImage loading failed: \(error.localizedDescription)")
                     }
                     .frame(width: 120, height: 120)
                     .clipShape(Circle())
@@ -68,8 +60,6 @@ struct MyProfileView: View {
                         Circle()
                             .stroke(AppTheme.shade2, lineWidth: 3)
                     )
-                    
-                    profileImageView
                 }
                 .buttonStyle(PlainButtonStyle())
                 

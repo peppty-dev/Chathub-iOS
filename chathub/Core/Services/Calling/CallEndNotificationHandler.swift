@@ -245,6 +245,7 @@ class CallEndNotificationHandler: NSObject {
             otherUserId: otherUserId,
             otherUserName: otherUserName,
             otherUserProfileImage: "",
+            otherUserGender: "Male",
             chatId: chatId
         )
         

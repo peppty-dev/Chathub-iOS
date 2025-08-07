@@ -1,11 +1,22 @@
 import SwiftUI
+import SDWebImageSwiftUI
+
+
 
 struct GamesTabView: View {
-    @StateObject private var viewModel = GamesTabViewModel()
+    @ObservedObject var viewModel: GamesTabViewModel
     @State private var selectedGame: Games?
     @State private var navigateToGameProfile = false
     @State private var navigateToMultiplayer = false
     @State private var navigateToRecent = false
+    
+    // Use AppStorage for persistent state that survives tab switching
+    @AppStorage("gamesTabView_hasInitiallyLoaded") private var hasInitiallyLoaded = false
+    
+    // Default initializer for backwards compatibility
+    init(viewModel: GamesTabViewModel? = nil) {
+        self.viewModel = viewModel ?? GamesTabViewModel()
+    }
     
     var body: some View {
         ZStack {
@@ -31,14 +42,18 @@ struct GamesTabView: View {
                             .font(.system(size: 14))
                             .foregroundColor(AppTheme.shade6)
                             .multilineTextAlignment(.center)
-                        Button("Retry") {
-                            viewModel.loadGames()
+                        VStack(spacing: 12) {
+                            Button("Retry") {
+                                viewModel.loadGames()
+                            }
+                            .foregroundColor(AppTheme.buttonColor)
+                            
+
                         }
-                        .foregroundColor(AppTheme.buttonColor)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if viewModel.gamesList.isEmpty {
-                    // Empty State
+                    // Empty State with Debug Info
                     VStack(spacing: 16) {
                         Image(systemName: "gamecontroller")
                             .font(.system(size: 48))
@@ -50,11 +65,15 @@ struct GamesTabView: View {
                             .font(.system(size: 14))
                             .foregroundColor(AppTheme.shade6)
                             .multilineTextAlignment(.center)
+                            
+
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     // Games List - matching OnlineUsersView structure
                     List {
+
+                        
                         // Quick Access Buttons Row - matching OnlineUsersView filter/refresh layout
                         HStack(spacing: 10) {
                             // Recent Games Button - matching Android new_filters_layout style
@@ -163,8 +182,7 @@ struct GamesTabView: View {
         .navigationTitle("")
         .navigationBarHidden(true)
         .background(
-            VStack {
-                // Hidden NavigationLinks for button navigation
+            Group {
                 NavigationLink(
                     destination: RecentGamesView(),
                     isActive: $navigateToRecent
@@ -183,16 +201,29 @@ struct GamesTabView: View {
             }
         )
         .onAppear {
-            AppLogger.log(tag: "LOG-APP: GamesTabView", message: "onAppear() setting up games view")
+            AppLogger.log(tag: "LOG-APP: GamesTabView", message: "viewDidAppear() - Games tab view appeared")
+            AppLogger.log(tag: "LOG-APP: GamesTabView", message: "viewDidAppear() - Current games count: \(viewModel.gamesList.count)")
+            AppLogger.log(tag: "LOG-APP: GamesTabView", message: "viewDidAppear() - isLoading: \(viewModel.isLoading)")
+            AppLogger.log(tag: "LOG-APP: GamesTabView", message: "viewDidAppear() - hasInitiallyLoaded: \(hasInitiallyLoaded)")
             
-            // Debug: Check current status
-            let status = GamesService.shared.getDatabaseStatus()
-            AppLogger.log(tag: "LOG-APP: GamesTabView", message: "onAppear() current status: \(status)")
-            
-            // Debug: Test API connectivity
-            GamesService.shared.testAPIConnection()
-            
-            viewModel.loadGames()
+            // EFFICIENCY FIX: Only load if we haven't loaded before or have no data
+            if !hasInitiallyLoaded || viewModel.gamesList.isEmpty {
+                AppLogger.log(tag: "LOG-APP: GamesTabView", message: "viewDidAppear() - First time loading or no data present, checking if data load needed")
+                
+                // Use proper initial load method that respects data state
+                AppLogger.log(tag: "LOG-APP: GamesTabView", message: "viewDidAppear() - Calling initialLoadIfNeeded")
+                viewModel.initialLoadIfNeeded()
+                
+                // Only set the flag to true if we actually have data now
+                if !viewModel.gamesList.isEmpty {
+                    hasInitiallyLoaded = true
+                    AppLogger.log(tag: "LOG-APP: GamesTabView", message: "viewDidAppear() - Data loaded successfully, setting hasInitiallyLoaded to true")
+                } else {
+                    AppLogger.log(tag: "LOG-APP: GamesTabView", message: "viewDidAppear() - No data loaded yet, will retry on next view appearance")
+                }
+            } else {
+                AppLogger.log(tag: "LOG-APP: GamesTabView", message: "viewDidAppear() - Already loaded before with data (\(viewModel.gamesList.count) games), skipping reload")
+            }
         }
     }
 }
@@ -205,32 +236,25 @@ struct GamesTabRowView: View {
         HStack(spacing: 0) {
             // Game Icon section - matching Android 65dp size exactly like OnlineUserRow
             ZStack {
-                AsyncImage(url: URL(string: game.GameIcon.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")) { phase in
-                    switch phase {
-                    case .empty:
-                        ProgressView()
-                            .frame(width: 65, height: 65)
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 65, height: 65)
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
-                    case .failure(_):
-                        // Default game placeholder
-                        Image("grayImage")
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 65, height: 65)
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
-                    @unknown default:
-                        Image("grayImage")
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 65, height: 65)
-                            .clipShape(RoundedRectangle(cornerRadius: 16))
-                    }
+                WebImage(url: URL(string: game.GameIcon.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    ProgressView()
+                        .frame(width: 65, height: 65)
                 }
+                .onFailure { error in
+                    // Fallback will be handled by the placeholder
+                }
+                .indicator(.activity)
+                .transition(.opacity)
+                .frame(width: 65, height: 65)
+                .clipShape(Circle())
+                .overlay(
+                    Circle()
+                        .stroke(AppTheme.shade2, lineWidth: 2)
+                )
             }
             .frame(width: 65, height: 65)
             .padding(.leading, 15)
@@ -241,7 +265,7 @@ struct GamesTabRowView: View {
             VStack(alignment: .leading, spacing: 8) {
                 // Game Name - matching Android 16sp with theme colors
                 Text(game.GameName)
-                    .font(.system(size: 16, weight: .regular))
+                    .font(.system(size: 16, weight: .medium))
                     .foregroundColor(AppTheme.darkText)
                     .lineLimit(1)
                     .padding(.top, 18)
@@ -255,6 +279,7 @@ struct GamesTabRowView: View {
                     }
                 }
                 .padding(.top, 2)
+
                 
                 Spacer()
             }

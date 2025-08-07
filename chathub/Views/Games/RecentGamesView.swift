@@ -1,4 +1,5 @@
 import SwiftUI
+import SDWebImageSwiftUI
 
 // MARK: - Make Games conform to Identifiable for recent games list
 extension Games: Identifiable {
@@ -113,43 +114,25 @@ struct RecentGameSimpleRow: View {
         HStack(spacing: 0) {
             // Game Icon section
             ZStack {
-                AsyncImage(url: URL(string: game.GameIcon.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")) { phase in
-                    switch phase {
-                    case .empty:
-                        ProgressView()
-                            .frame(width: 65, height: 65)
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 65, height: 65)
-                            .clipShape(Circle())
-                            .overlay(
-                                Circle()
-                                    .stroke(Color("shade2"), lineWidth: 2)
-                            )
-                    case .failure(_):
-                        Image("grayImage")
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 65, height: 65)
-                            .clipShape(Circle())
-                            .overlay(
-                                Circle()
-                                    .stroke(Color("shade2"), lineWidth: 2)
-                            )
-                    @unknown default:
-                        Image("grayImage")
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 65, height: 65)
-                            .clipShape(Circle())
-                            .overlay(
-                                Circle()
-                                    .stroke(Color("shade2"), lineWidth: 2)
-                            )
-                    }
+                WebImage(url: URL(string: game.GameIcon.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")) { image in
+                    image
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                } placeholder: {
+                    ProgressView()
+                        .frame(width: 65, height: 65)
                 }
+                .onFailure { error in
+                    // Fallback will be handled by the placeholder
+                }
+                .indicator(.activity)
+                .transition(.opacity)
+                .frame(width: 65, height: 65)
+                .clipShape(Circle())
+                .overlay(
+                    Circle()
+                        .stroke(Color("shade2"), lineWidth: 2)
+                )
             }
             .frame(width: 65, height: 65)
             .padding(.leading, 15)
@@ -158,25 +141,26 @@ struct RecentGameSimpleRow: View {
             // Content section
             VStack(alignment: .leading, spacing: 8) {
                 Text(game.GameName)
-                    .font(.system(size: 16, weight: .regular))
+                    .font(.system(size: 16, weight: .medium))
                     .foregroundColor(Color("dark"))
                     .lineLimit(1)
                     .padding(.top, 18)
                 
                 HStack(spacing: 4) {
                     Text("\(game.GamePlays) plays")
-                        .font(.caption)
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundColor(Color("shade6"))
                     
                     Text("•")
-                        .font(.caption)
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundColor(Color("shade6"))
                     
                     Text("Recently played")
-                        .font(.caption)
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundColor(Color("shade6"))
                 }
                 .padding(.top, 2)
+
                 
                 Spacer()
             }

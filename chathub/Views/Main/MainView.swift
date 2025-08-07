@@ -8,6 +8,15 @@ struct MainView: View {
     @StateObject private var badgeManager = InAppNotificationBadgeManager.shared
     @State private var isSearchFocused = false
     
+    // CRITICAL FIX: Move OnlineUsersViewModel to MainView level to persist across tab switches
+    @StateObject private var onlineUsersViewModel = OnlineUsersViewModel()
+    
+    // EFFICIENCY FIX: Move GamesTabViewModel to MainView level to persist across tab switches
+    @StateObject private var gamesTabViewModel = GamesTabViewModel()
+    
+    // EFFICIENCY FIX: Move DiscoverTabViewModel to MainView level to persist across tab switches
+    @StateObject private var discoverTabViewModel = DiscoverTabViewModel()
+    
     // Add state for refresh popup at MainView level
 
     
@@ -56,17 +65,17 @@ struct MainView: View {
                     ZStack {
                         Group {
                             if selectedTab == 0 {
-                                OnlineUsersView()
+                                OnlineUsersView(viewModel: onlineUsersViewModel)
                             } else if selectedTab == 1 {
                                 ChatsTabView()
                             } else if selectedTab == 2 {
-                                DiscoverTabView(onSearchFocusChanged: { focused in
+                                DiscoverTabView(viewModel: discoverTabViewModel, onSearchFocusChanged: { focused in
                                     withAnimation(.easeInOut(duration: 0.2)) {
                                         isSearchFocused = focused
                                     }
                                 })
                             } else if selectedTab == 3 {
-                                GamesTabView()
+                                GamesTabView(viewModel: gamesTabViewModel)
                             } else if selectedTab == 4 {
                                 SettingsTabView()
                             }
@@ -133,6 +142,14 @@ struct MainView: View {
                     badgeManager.clearDiscoverBadge()
                 }
             }
+            .overlay(
+                // ANDROID PARITY: Rating popup (shows when returning from MessagesView)
+                Group {
+                    if RatingService.shared.showRatingDialog {
+                        RatingPopupView()
+                    }
+                }
+            )
             .onAppear {
                 setupMainView()
                 

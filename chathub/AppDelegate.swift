@@ -127,10 +127,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate, MessagingDelegate {
 
 		// Firebase Messaging delegate already set immediately after configuration (line 87)
 
-		// Initialize background task manager (Android WorkManager parity)
-		BackgroundTaskManager.shared.registerBackgroundTasks()
-		BackgroundTaskManager.shared.scheduleAllPeriodicTasks()
-		AppLogger.log(tag: "LOG-APP: AppDelegate", message: "didFinishLaunchingWithOptions - BackgroundTaskManager initialized (Android WorkManager parity)")
+		// REMOVED: BackgroundTaskManager - All tasks were redundant with existing real-time listeners and foreground initialization
+		// Profanity updates: Called in WelcomeView + LoginView + FirebaseServices
+		// Games updates: Called in AppDelegate + GamesTabViewModel  
+		// All other tasks: Have real-time Firebase listeners or are unused
+		AppLogger.log(tag: "LOG-APP: AppDelegate", message: "didFinishLaunchingWithOptions - BackgroundTaskManager removed (tasks were redundant)")
 		
 		// Initialize background timer manager for feature cooldown monitoring
 		BackgroundTimerManager.shared.startMonitoring()
@@ -158,6 +159,14 @@ class AppDelegate: UIResponder, UIApplicationDelegate, MessagingDelegate {
 		DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
 			ModerationManagerService.shared.checkAndApplyModerationRestrictions()
 		}
+
+		#if DEBUG
+		// DEBUG: Populate default app settings in Firebase (only in debug builds)
+		// COMMENTED OUT: Firebase settings have been populated. Uncomment when needed.
+		// DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) {
+		//     AppSettingsDebugPopulator.setupDefaultSettings()
+		// }
+		#endif
 
 		return true
 	}
@@ -225,21 +234,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate, MessagingDelegate {
 
 	// MARK: - Enhanced Service Initialization
 
-	/// Initialize games service with error handling
+	/// Initialize games service with centralized management
 	private func initializeGamesService() {
-		AppLogger.log(tag: "LOG-APP: AppDelegate", message: "didFinishLaunchingWithOptions() initializing games service")
+		AppLogger.log(tag: "LOG-APP: AppDelegate", message: "didFinishLaunchingWithOptions() initializing centralized games service")
 		
-		do {
-			GamesService.shared.fetchGamesIfNeeded { success in
-				if success {
-					AppLogger.log(tag: "LOG-APP: AppDelegate", message: "didFinishLaunchingWithOptions() games initialization: success")
-				} else {
-					AppLogger.log(tag: "LOG-APP: AppDelegate", message: "didFinishLaunchingWithOptions() games initialization: failed")
-				}
-			}
-		} catch {
-			AppLogger.log(tag: "LOG-APP: AppDelegate", message: "didFinishLaunchingWithOptions() games initialization error: \(error.localizedDescription)")
-		}
+		// CENTRALIZED GAMES FETCHING: Single point of control for all games data
+		GamesCentralManager.shared.initializeGames()
 	}
 
 	/// Initialize subscription system with retry mechanism
@@ -315,15 +315,8 @@ class AppDelegate: UIResponder, UIApplicationDelegate, MessagingDelegate {
 		AppLogger.log(tag: "LOG-APP: AppDelegate", message: "initializeSubscriptionSystem() Subscription system initialization completed")
 	}
 
-	// DEPRECATED: This method is kept for backward compatibility but no longer requests permissions
-	// Notification permission is now handled by NotificationPermissionService at appropriate time
-	func setUpNotifications(application : UIApplication){
-		AppLogger.log(tag: "LOG-APP: AppDelegate", message: "setUpNotifications() DEPRECATED - Notification setup moved to NotificationPermissionService")
-		
-		// Only register for remote notifications without requesting permission
-		// This allows silent notifications for data sync
-		application.registerForRemoteNotifications()
-	}
+	// REMOVED: setUpNotifications() - notification setup moved to NotificationPermissionService
+	// Use NotificationPermissionService.requestPermission() instead
 
 	// REMOVED: showNotificationSettingsAlert() - now handled by NotificationPermissionService
 

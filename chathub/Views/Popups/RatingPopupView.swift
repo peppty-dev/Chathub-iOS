@@ -1,24 +1,24 @@
 import SwiftUI
 
-/// Rating Dialog Overlay View - matches Android dialog_rate_us.xml exactly
-struct RatingDialogOverlayView: View {
+/// Rating Popup View - matches Android dialog_rate_us.xml exactly
+struct RatingPopupView: View {
     @ObservedObject private var ratingService = RatingService.shared
     @Environment(\.colorScheme) var colorScheme
     
-    // Custom background color: shade1 in light mode, shade2 in dark mode (following RefreshPopupView pattern)
+    // Consistent background color: shade2 (following RefreshPopupView pattern)
     private var customBackgroundColor: Color {
-        colorScheme == .dark ? Color("shade2") : Color("shade1")
+        Color("shade2")
     }
     
     var body: some View {
         ZStack {
             // Background overlay - dark semi-transparent covering everything including top bar
-            Color.black.opacity(0.4)
+            Color.black.opacity(0.6)
                 .ignoresSafeArea(.all, edges: .all)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .onTapGesture {
                     // Allow dismissal by tapping background
-                    AppLogger.log(tag: "LOG-APP: RatingDialogOverlayView", message: "background tapped - dismissing rating dialog")
+                    AppLogger.log(tag: "LOG-APP: RatingPopupView", message: "background tapped - dismissing rating dialog")
                     ratingService.cancelRatingDialog()
                 }
             
@@ -112,7 +112,7 @@ struct RatingDialogOverlayView: View {
                     HStack(spacing: 12) {
                         // Maybe Later Button (matching Android R.id.maybe_later) - improved styling
                         Button(action: {
-                            AppLogger.log(tag: "LOG-APP: RatingDialogOverlayView", message: "maybe later button tapped")
+                            AppLogger.log(tag: "LOG-APP: RatingPopupView", message: "maybe later button tapped")
                             ratingService.cancelRatingDialog()
                         }) {
                             HStack(spacing: 8) {
@@ -139,7 +139,7 @@ struct RatingDialogOverlayView: View {
                         
                         // Submit Button (matching Android R.id.submit_rating) - improved styling with gradient
                         Button(action: {
-                            AppLogger.log(tag: "LOG-APP: RatingDialogOverlayView", message: "submit rating button tapped with rating: \(ratingService.rating)")
+                            AppLogger.log(tag: "LOG-APP: RatingPopupView", message: "submit rating button tapped with rating: \(ratingService.rating)")
                             if ratingService.rating > 0 {
                                 ratingService.submitRating()
                             }
@@ -225,5 +225,5 @@ struct RatingDialogOverlayView: View {
 }
 
 #Preview {
-    RatingDialogOverlayView()
-} 
+    RatingPopupView()
+}

@@ -8,13 +8,119 @@ The ChatHub iOS Refresh Feature is a sophisticated freemium monetization system 
 
 **Technical Architecture**: Built on SessionManager for configuration persistence, BackgroundTimerManager for real-time cooldown processing, and RefreshAnalytics for business intelligence. Features precision timer system with millisecond-accurate cooldown expiration, dual-timer UI architecture, and cross-platform analytics with iOS-specific event naming.
 
-## 1. Overview
+## 1. Step-by-Step Refresh Limit Flow
+
+This section provides a complete step-by-step breakdown of how the refresh limit popup system works from user interaction to completion.
+
+### **STEP 1: User Action**
+- User taps **"Refresh users"** button in DiscoverTabView
+
+### **STEP 2: Check Refresh Limits**
+- System calls `RefreshLimitManager.shared.checkRefreshLimit()`
+- Performs 6-layer validation (detailed below)
+
+### **STEP 3: Validation Layer 1 - Auto-Reset Check**
+- Check if cooldown expired globally
+- ✅ **Expired**: Auto-reset count to 0 → Allow refresh, no popup
+- ❌ **Active**: Continue validation
+
+### **STEP 4: Validation Layer 2 - Lite Subscription**
+- Check `subscriptionSessionManager.hasLiteAccess()`
+- ✅ **Lite+ User**: Bypass all limits → Allow refresh, no popup
+- ❌ **Free User**: Continue validation
+
+### **STEP 5: Validation Layer 3 - New User Grace**
+- Check if user is in new user free period
+- ✅ **New User**: Bypass limits → Allow refresh, no popup
+- ❌ **Regular User**: Continue validation
+
+### **STEP 6: Validation Layer 4 - Usage Count**
+- Get current refresh count: `getCurrentUsageCount()`
+- Get limit from config: `getLimit()` (e.g., 2 refreshes)
+- Check: `currentUsage >= limit`
+
+### **STEP 7: Validation Layer 5 - Fresh Reset**
+- If auto-reset just happened in Step 3
+- ✅ **Just Reset**: Allow immediate refresh, no popup
+- ❌ **No Reset**: Continue to decision
+
+### **STEP 8: Decision Point**
+- **Always-Show Strategy**: Always show popup regardless of usage
+- Display RefreshLimitPopupView with countdown and subscription options
+
+### **STEP 9: Popup Content**
+- **Title**: "Refresh users"
+- **Description**: Current usage and limit information
+- **Progress Bar**: Lite gradient countdown timer
+- **Button Options**: "Refresh" + "Subscribe to Lite"
+- **Usage Display**: "X of Y refreshes used"
+
+### **STEP 10: Popup Timer System**
+- **UI Timer**: Updates every 0.1 seconds
+- **Background Timer**: Safety check every 1 second
+- **Progress Bar**: Animates countdown visually
+
+### **STEP 11: User Interaction**
+- **Option A**: User taps "Refresh" → Proceed if within limits
+- **Option B**: User taps "Subscribe to Lite" → Navigate to subscription
+- **Option C**: User taps background → Dismiss popup
+- **Option D**: User waits → Timer counts down
+
+### **STEP 12A: REFRESH ALLOWED PATH**
+- If within limits (`currentUsage < limit`):
+- Call `RefreshLimitManager.shared.performRefresh()`
+- Increment usage count: `currentUsage + 1`
+- Start cooldown if limit reached
+- Execute refresh successfully
+- Track analytics: `trackRefreshSuccessful()`
+
+### **STEP 12B: REFRESH BLOCKED PATH**
+- If limit reached (`currentUsage >= limit`):
+- Show "Limit reached" message in popup
+- User must wait for cooldown or subscribe
+- Track analytics: `trackRefreshBlocked()`
+
+### **STEP 13: Timer Expiration**
+- When countdown reaches 0:
+- Call `resetCooldown()` globally
+- Set refresh count back to 0
+- Update popup UI to allow fresh refreshes
+- User can now refresh again
+
+### **STEP 14: Reset Mechanism**
+- **What Resets**: Global refresh count (not per-user)
+- **When**: Only when cooldown time expires
+- **Storage**: `UserDefaults` global keys
+- **Security**: Cannot be bypassed by app restart
+
+### **STEP 15: Global Usage Tracking**
+```
+All refreshes count toward single global limit:
+Refresh 1: Count = 1/2
+Refresh 2: Count = 2/2 (Limit reached - show wait message)
+Refresh 3: Blocked until cooldown expires
+```
+
+### **STEP 16: Analytics Tracking**
+- Track popup shown: `trackRefreshLimitPopupShown()`
+- Track button taps: `trackSubscriptionButtonTapped()`
+- Track popup dismissals: `trackPopupDismissed()`
+- Track refresh success/blocked: `trackRefreshSuccessful()/trackRefreshBlocked()`
+
+### **🎯 Quick Summary**
+1. **Refresh Button** → 2. **6-Layer Validation** → 3. **Always Show Popup** → 4. **User Choice** → 5. **Allow/Block Refresh** → 6. **Timer/Reset** → 7. **Fresh Refreshes**
+
+**Key Point**: Refresh limits are **global** (unlike message limits which are per-user)!
+
+---
+
+## 2. Overview
 
 This document describes the **current implementation** of the Refresh Feature in the ChatHub iOS application. The feature allows users to manually refresh online user lists, implementing a freemium model with usage limits for non-premium users and unlimited access for Lite subscribers.
 
 **✅ Feature Parity Status**: The Refresh Feature serves as the **reference implementation** for Filter and Search features. All three features have **perfect parity** in terms of architecture, timing, UI design, analytics coverage, and business logic patterns.
 
-### 1.1 Feature Status
+### 2.1 Feature Status
 
 **Current Status**: ✅ **Fully Operational** - All refresh functionality is working correctly with complete parity across Filter and Search features.
 
@@ -1004,7 +1110,7 @@ Each event includes rich contextual parameters with iOS-specific prefixes:
   - **Available State**: Shows refresh button with remaining count (e.g., "3 left") + subscription button
   - **Cooldown State**: Hides refresh button, shows progress bar + "Time remaining" text + subscription button only
 - **Enhanced Conversion Focus**: During cooldown, removes competing CTA (refresh button) to focus user attention on subscription
-- **Visual Progress Indication**: Thin horizontal progress bar (4px height) shows countdown progress, decreasing from right to left during cooldown
+- **Visual Progress Indication**: Thin horizontal progress bar (4px height) with Lite subscription gradient colors (`liteGradientStart` to `liteGradientEnd`) shows countdown progress, decreasing from right to left during cooldown
 - **Clear State Communication**: "Time remaining: X:XX" text provides precise countdown information
 - **Seamless State Transitions**: UI smoothly transitions between available and cooldown states
 - **Automatic Reset**: When cooldown expires, usage count automatically resets to 0 and UI returns to available state

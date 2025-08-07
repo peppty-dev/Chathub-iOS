@@ -28,13 +28,7 @@ class AppNotificationService: NSObject {
         registerForRemoteNotifications()
     }
     
-    // DEPRECATED: Permission request moved to NotificationPermissionService
-    private func requestNotificationPermission() {
-        AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "requestNotificationPermission() DEPRECATED - Use NotificationPermissionService instead")
-        
-        // This method is kept for backward compatibility but does nothing
-        // Permission is now requested by NotificationPermissionService at appropriate time
-    }
+    // REMOVED: requestNotificationPermission() - use NotificationPermissionService instead
     
     private func registerForRemoteNotifications() {
         AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "registerForRemoteNotifications() Registering for remote notifications")

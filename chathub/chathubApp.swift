@@ -15,9 +15,9 @@ struct chathubApp: App {
     // - SwiftUI App: Handles main app structure, state management, and view lifecycle
     // - UIKit AppDelegate: Required for critical iOS services that cannot be migrated:
     //   • Firebase configuration (must be in didFinishLaunchingWithOptions)
-    //   • Background task registration (BGTaskScheduler requires early registration)
     //   • Push notification delegation (FCM MessagingDelegate)
     //   • Complex service initialization with retry mechanisms
+    //   • Background timer management for feature cooldowns
     //
     // This follows Apple's recommended migration pattern for apps with complex requirements.
     // See: https://developer.apple.com/documentation/SwiftUI/Migrating-to-the-SwiftUI-life-cycle

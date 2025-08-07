@@ -1,6 +1,7 @@
 import SwiftUI
 import FirebaseFirestore
 import UIKit
+import SDWebImageSwiftUI
 
 struct PhotoViewerView: View {
     let imageUrl: String
@@ -30,45 +31,38 @@ struct PhotoViewerView: View {
     @ViewBuilder
     private func imageContentView() -> some View {
         if imageLoaded {
-            let baseImage = AsyncImage(url: URL(string: imageUrl.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")) { phase in
-                switch phase {
-                case .empty:
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.3))
-                        .overlay(
-                            ProgressView()
-                                .frame(width: 50, height: 50)
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                case .success(let image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .transition(.opacity.animation(.easeInOut(duration: 0.5)))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .onAppear {
-                            AppLogger.log(tag: "LOG-APP: PhotoViewerView", message: "photo loaded successfully")
-                        }
-                case .failure(let error):
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.3))
-                        .overlay(
-                            Image(systemName: "photo")
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .frame(width: 50, height: 50)
-                                .foregroundColor(.gray)
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .onAppear {
-                            AppLogger.log(tag: "LOG-APP: PhotoViewerView", message: "photo loading failed: \(error.localizedDescription)")
-                        }
-                @unknown default:
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.3))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                }
+            let baseImage = WebImage(url: URL(string: imageUrl.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "")) { image in
+                image
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } placeholder: {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+                    .overlay(
+                        ProgressView()
+                            .frame(width: 50, height: 50)
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+            .onSuccess { image, data, cacheType in
+                AppLogger.log(tag: "LOG-APP: PhotoViewerView", message: "photo loaded successfully")
+            }
+            .onFailure { error in
+                AppLogger.log(tag: "LOG-APP: PhotoViewerView", message: "photo loading failed: \(error.localizedDescription)")
+            }
+            .background(
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+                    .overlay(
+                        Image(systemName: "photo")
+                            .resizable()
+                            .aspectRatio(contentMode: .fit)
+                            .frame(width: 50, height: 50)
+                            .foregroundColor(.gray)
+                    )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            )
 
             baseImage
                 .scaleEffect(currentZoom + totalZoom)

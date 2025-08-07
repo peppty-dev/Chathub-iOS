@@ -1,6 +1,7 @@
 import SwiftUI
 import AgoraRtcKit
 import FirebaseFirestore
+import SDWebImageSwiftUI
 
 // MARK: - UIViewWrapper
 struct UIViewWrapper: UIViewRepresentable {
@@ -36,7 +37,7 @@ struct IncomingVideoCallView: View {
                 // Top section with caller info
                 VStack(spacing: 16) {
                     // Caller's profile image
-                    AsyncImage(url: URL(string: profileImageUrl)) { image in
+                    WebImage(url: URL(string: profileImageUrl)) { image in
                         image
                             .resizable()
                             .aspectRatio(contentMode: .fill)
@@ -44,10 +45,27 @@ struct IncomingVideoCallView: View {
                         Image(callerGender == "Male" ? "male" : "female")
                             .resizable()
                             .aspectRatio(contentMode: .fill)
+                            .frame(width: 120, height: 120)
+                            .clipShape(Circle())
                     }
-                    .frame(width: 120, height: 120)
-                    .clipShape(Circle())
-                    .overlay(Circle().stroke(Color.white, lineWidth: 4))
+                    .onSuccess { image, data, cacheType in
+                        // Image loaded successfully
+                    }
+                    .onFailure { error in
+                        // Image loading failed
+                    }
+                    .indicator(.activity)
+                    .transition(.opacity)
+                        .frame(width: 120, height: 120)
+                        .clipShape(Circle())
+                        .overlay(Circle().stroke(Color.white, lineWidth: 4))
+                        .background(
+                            Image(callerGender == "Male" ? "male" : "female")
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 120, height: 120)
+                                .clipShape(Circle())
+                        )
                     
                     VStack(spacing: 8) {
                         Text(callerName)

@@ -8,11 +8,118 @@ The ChatHub iOS Filters Feature is a sophisticated user discovery system that en
 
 **Technical Architecture**: Built on SessionManager for configuration persistence, BackgroundTimerManager for real-time cooldown processing, and FilterAnalytics for business intelligence. Features precision timer system with millisecond-accurate cooldown expiration, comprehensive database schema supporting all filter types, and cross-platform analytics with iOS-specific event naming.
 
-## 1. Overview
+## 1. Step-by-Step Filter Limit Flow
+
+This section provides a complete step-by-step breakdown of how the filter limit popup system works from user interaction to completion.
+
+### **STEP 1: User Action**
+- User taps **"Apply Filters"** button in FiltersView after setting filter criteria
+
+### **STEP 2: Check Filter Limits**
+- System calls `FilterLimitManager.shared.checkFilterLimit()`
+- Performs 6-layer validation (detailed below)
+
+### **STEP 3: Validation Layer 1 - Auto-Reset Check**
+- Check if cooldown expired globally
+- ✅ **Expired**: Auto-reset count to 0 → Allow filter, no popup
+- ❌ **Active**: Continue validation
+
+### **STEP 4: Validation Layer 2 - Lite Subscription**
+- Check `subscriptionSessionManager.hasLiteAccess()`
+- ✅ **Lite+ User**: Bypass all limits → Allow filter, no popup
+- ❌ **Free User**: Continue validation
+
+### **STEP 5: Validation Layer 3 - New User Grace**
+- Check if user is in new user free period
+- ✅ **New User**: Bypass limits → Allow filter, no popup
+- ❌ **Regular User**: Continue validation
+
+### **STEP 6: Validation Layer 4 - Usage Count**
+- Get current filter count: `getCurrentUsageCount()`
+- Get limit from config: `getLimit()` (e.g., 3 filters)
+- Check: `currentUsage >= limit`
+
+### **STEP 7: Validation Layer 5 - Fresh Reset**
+- If auto-reset just happened in Step 3
+- ✅ **Just Reset**: Allow immediate filter, no popup
+- ❌ **No Reset**: Continue to decision
+
+### **STEP 8: Decision Point**
+- **Always-Show Strategy**: Always show popup regardless of usage
+- Display FilterLimitPopupView with countdown and subscription options
+
+### **STEP 9: Popup Content**
+- **Title**: "Apply filters"
+- **Description**: Current usage and limit information
+- **Progress Bar**: Lite gradient countdown timer
+- **Button Options**: "Apply filters" + "Subscribe to Lite"
+- **Usage Display**: "X of Y filters used"
+
+### **STEP 10: Popup Timer System**
+- **UI Timer**: Updates every 0.1 seconds
+- **Background Timer**: Safety check every 1 second
+- **Progress Bar**: Animates countdown visually
+
+### **STEP 11: User Interaction**
+- **Option A**: User taps "Apply filters" → Proceed if within limits
+- **Option B**: User taps "Subscribe to Lite" → Navigate to subscription
+- **Option C**: User taps background → Dismiss popup
+- **Option D**: User waits → Timer counts down
+
+### **STEP 12A: FILTER ALLOWED PATH**
+- If within limits (`currentUsage < limit`):
+- Call `FilterLimitManager.shared.performFilter()`
+- Increment usage count: `currentUsage + 1`
+- Start cooldown if limit reached
+- Execute filter successfully
+- Track analytics: `trackFilterSuccessful()`
+
+### **STEP 12B: FILTER BLOCKED PATH**
+- If limit reached (`currentUsage >= limit`):
+- Show "Limit reached" message in popup
+- User must wait for cooldown or subscribe
+- Track analytics: `trackFilterBlocked()`
+
+### **STEP 13: Timer Expiration**
+- When countdown reaches 0:
+- Call `resetCooldown()` globally
+- Set filter count back to 0
+- Update popup UI to allow fresh filters
+- User can now apply filters again
+
+### **STEP 14: Reset Mechanism**
+- **What Resets**: Global filter count (not per-user)
+- **When**: Only when cooldown time expires
+- **Storage**: `UserDefaults` global keys
+- **Security**: Cannot be bypassed by app restart
+
+### **STEP 15: Global Usage Tracking**
+```
+All filters count toward single global limit:
+Filter 1: Count = 1/3
+Filter 2: Count = 2/3
+Filter 3: Count = 3/3 (Limit reached - show wait message)
+Filter 4: Blocked until cooldown expires
+```
+
+### **STEP 16: Analytics Tracking**
+- Track popup shown: `trackFilterLimitPopupShown()`
+- Track button taps: `trackSubscriptionButtonTapped()`
+- Track popup dismissals: `trackPopupDismissed()`
+- Track filter success/blocked: `trackFilterSuccessful()/trackFilterBlocked()`
+
+### **🎯 Quick Summary**
+1. **Apply Filters** → 2. **6-Layer Validation** → 3. **Always Show Popup** → 4. **User Choice** → 5. **Allow/Block Filter** → 6. **Timer/Reset** → 7. **Fresh Filters**
+
+**Key Point**: Filter limits are **global** (unlike message limits which are per-user)!
+
+---
+
+## 2. Overview
 
 This document describes the **current implementation** of the Filters Feature in the ChatHub iOS application. The feature allows users to apply advanced search criteria to discover personalized matches, implementing a freemium model with usage limits for non-premium users and unlimited access for Lite subscribers.
 
-### 1.1 Feature Status
+### 2.1 Feature Status
 
 **Current Status**: ✅ **Fully Operational** - All 5 filter types are working correctly with complete parity across Refresh and Search features.
 
@@ -83,7 +190,7 @@ This document describes the **current implementation** of the Filters Feature in
 
 #### 1.1.4 Enhanced Conversion Focus
 - **Eliminates Competing CTA**: During cooldown, removes filter button to focus attention on subscription
-- **Visual Progress Indication**: Thin horizontal progress bar (4px height) shows countdown progress, decreasing from right to left as time runs out
+- **Visual Progress Indication**: Thin horizontal progress bar (4px height) with Lite subscription gradient colors (`liteGradientStart` to `liteGradientEnd`) shows countdown progress, decreasing from right to left as time runs out
 - **Contextual Messaging**: Description changes to explain current state and available options
 - **Clear Time Communication**: "Time remaining: X:XX" provides precise countdown information
 - **Consistent Spacing**: Uniform 24pt spacing between all major sections for professional appearance
@@ -93,7 +200,7 @@ This document describes the **current implementation** of the Filters Feature in
 - **Spacing Consistency**: Standardized to 24pt spacing between all major sections (title, progress, buttons)
 - **Cooldown Timing Fix**: Critical fix to start cooldown timestamp when popup opens (not when limit reached), ensuring users see full timer duration
 - **Simplified Structure**: Reduced nested VStack containers for cleaner code and consistent 12pt internal spacing
-- **Visual Polish**: 4px height progress bar with smooth linear animation and proper corner radius
+- **Visual Polish**: 4px height progress bar with Lite subscription gradient colors, smooth linear animation and proper corner radius
 
 #### 1.1.6 🚨 CRITICAL: Cross-Feature Interference Bug Fix
 - **Critical Bug Identified**: Individual feature checks were calling `BackgroundTimerManager.shared.checkAllCooldowns()`, causing unintended interference between refresh, filter, and search features
@@ -810,9 +917,7 @@ deleteAllOnlineUsers() - Clear cached results (line 743)
     ↓
 Call onFiltersApplied callback with filter dictionary (line 701)
     ↓
-OnlineUsersViewModel.refreshFiltersFromSessionManager() (line 586)
-    ↓
-viewModel.applyFilter() with fresh Firebase sync
+OnlineUsersViewModel.applyFilter() with fresh Firebase sync
     ↓
 triggerBackgroundDataSync() with filter parameters
     ↓

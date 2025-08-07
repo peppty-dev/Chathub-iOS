@@ -1,19 +1,22 @@
 import SwiftUI
 import AgoraRtcKit
+import SDWebImageSwiftUI
 
 struct MakeAudioCallView: View {
     // MARK: - Properties
     let otherUserId: String
     let otherUserName: String
     let otherUserProfileImage: String
+    let otherUserGender: String
     let chatId: String
     
     @StateObject private var viewModel: MakeAudioCallViewModel
     
-    init(otherUserId: String, otherUserName: String, otherUserProfileImage: String, chatId: String) {
+    init(otherUserId: String, otherUserName: String, otherUserProfileImage: String, otherUserGender: String, chatId: String) {
         self.otherUserId = otherUserId
         self.otherUserName = otherUserName
         self.otherUserProfileImage = otherUserProfileImage
+        self.otherUserGender = otherUserGender
         self.chatId = chatId
         _viewModel = StateObject(wrappedValue: MakeAudioCallViewModel(otherUserId: otherUserId, otherUserName: otherUserName, channelId: chatId))
     }
@@ -23,40 +26,31 @@ struct MakeAudioCallView: View {
         VStack(spacing: 32) {
             // Profile Image
             if !otherUserProfileImage.isEmpty, let url = URL(string: otherUserProfileImage) {
-                AsyncImage(url: url) { phase in
-                    switch phase {
-                    case .empty:
-                        ProgressView()
-                            .frame(width: 100, height: 100)
-                    case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: 100, height: 100)
-                            .clipShape(Circle())
-                            .onAppear {
-                                AppLogger.log(tag: "LOG-APP: MakeAudioCallView", message: "call profile image loaded")
-                            }
-                    case .failure(let error):
-                        Image(systemName: "person.crop.circle")
-                            .resizable()
-                            .foregroundColor(.gray)
-                            .frame(width: 100, height: 100)
-                            .onAppear {
-                                AppLogger.log(tag: "LOG-APP: MakeAudioCallView", message: "call profile image failed: \(error.localizedDescription)")
-                            }
-                    @unknown default:
-                        Image(systemName: "person.crop.circle")
-                            .resizable()
-                            .foregroundColor(.gray)
-                            .frame(width: 100, height: 100)
-                    }
+                WebImage(url: url) { image in
+                    image
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 100, height: 100)
+                        .clipShape(Circle())
+                } placeholder: {
+                    Image(otherUserGender == "Male" ? "male" : "female")
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 100, height: 100)
+                        .clipShape(Circle())
+                }
+                .onSuccess { image, data, cacheType in
+                    AppLogger.log(tag: "LOG-APP: MakeAudioCallView", message: "call profile image loaded")
+                }
+                .onFailure { error in
+                    AppLogger.log(tag: "LOG-APP: MakeAudioCallView", message: "call profile image failed: \(error.localizedDescription)")
                 }
             } else {
-                Image(systemName: "person.crop.circle")
+                Image(otherUserGender == "Male" ? "male" : "female")
                     .resizable()
+                    .aspectRatio(contentMode: .fill)
                     .frame(width: 100, height: 100)
-                    .foregroundColor(.gray)
+                    .clipShape(Circle())
             }
             
             // Name
@@ -138,6 +132,7 @@ struct MakeAudioCallView_Previews: PreviewProvider {
             otherUserId: "user123",
             otherUserName: "John Doe",
             otherUserProfileImage: "",
+            otherUserGender: "Male",
             chatId: "chat_abc"
         )
     }

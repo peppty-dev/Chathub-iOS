@@ -48,14 +48,40 @@ class ConversationLimitManagerNew: BaseFeatureLimitManager {
     func checkConversationLimit() -> FeatureLimitResult {
         let currentUsage = getCurrentUsageCount()
         let limit = getLimit()
-        let remainingCooldown = getRemainingCooldown()
+        var remainingCooldown = getRemainingCooldown()
+
+        // Shadow Ban check (apply on conversation start)
+        let moderationManager = ModerationSettingsSessionManager.shared
+        if moderationManager.textModerationIssueSB {
+            let currentTime = Int64(Date().timeIntervalSince1970)
+            let sbStart = moderationManager.textModerationIssueCoolDownTime
+            let sbDurationSeconds = Int64(SessionManager.shared.defaults.integer(forKey: "TEXT_MODERATION_SB_LOCK_DURATION_SECONDS"))
+            let effectiveDuration = sbDurationSeconds > 0 ? sbDurationSeconds : 3600
+            let elapsed = currentTime - sbStart
+            let sbRemaining = max(0, TimeInterval(effectiveDuration - elapsed))
+            if sbRemaining > 1.0 { // SB active
+                remainingCooldown = sbRemaining
+                // Always show popup, but block proceed
+                return FeatureLimitResult(
+                    canProceed: false,
+                    showPopup: true,
+                    remainingCooldown: remainingCooldown,
+                    currentUsage: currentUsage,
+                    limit: limit
+                )
+            } else {
+                // SB expired, clear flags
+                moderationManager.textModerationIssueSB = false
+                moderationManager.textModerationIssueCoolDownTime = 0
+            }
+        }
         
-        // Check if user can proceed without popup (Plus subscribers and new users)
-        let isPlusSubscriber = subscriptionSessionManager.isUserSubscribedToPlus()
+        // Check if user can proceed without popup (ONLY Plus+ subscribers and new users)
+        let hasPlusOrHigher = subscriptionSessionManager.hasPlusTierOrHigher()
         let isNewUserInFreePeriod = isNewUser()
         
-        // Plus subscribers and new users bypass popup entirely
-        if isPlusSubscriber || isNewUserInFreePeriod {
+        // ONLY Plus+ subscribers and new users bypass popup entirely
+        if hasPlusOrHigher || isNewUserInFreePeriod {
             return FeatureLimitResult(
                 canProceed: true,
                 showPopup: false,
@@ -65,7 +91,7 @@ class ConversationLimitManagerNew: BaseFeatureLimitManager {
             )
         }
         
-        // For all other users (including Lite subscribers), always show popup (to display conversation count or timer)
+        // For all other users (FREE and LITE users), always show popup (to display conversation count or timer)
         let canProceed = canPerformAction()
         
         // Always show popup for non-Plus/non-new users to display progress

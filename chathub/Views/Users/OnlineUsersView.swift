@@ -1,5 +1,6 @@
 import SwiftUI
 import FirebaseFirestore
+import SDWebImageSwiftUI
 
 
 
@@ -17,44 +18,24 @@ struct OnlineUserRow: View {
                 // Main profile image with border
                 ZStack {
                     if let url = URL(string: user.profileImage), !user.profileImage.isEmpty {
-                        AsyncImage(url: url) { phase in
-                            switch phase {
-                            case .empty:
-                                ProgressView()
-                                    .frame(width: 65, height: 65)
-                            case .success(let image):
-                                image
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: 65, height: 65)
-                                    .clipShape(Circle())
-                                    .overlay(
-                                        Circle()
-                                            .stroke(AppTheme.shade2, lineWidth: 2)
-                                    )
-                            case .failure(_):
-                                // Gender-based gradient placeholder while image loads - matching Android design
-                                Image(user.gender.lowercased() == "male" ? "male_icon" : "Female_icon")
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: 65, height: 65)
-                                    .clipShape(Circle())
-                                    .overlay(
-                                        Circle()
-                                            .stroke(AppTheme.shade2, lineWidth: 2)
-                                    )
-                            @unknown default:
-                                Image(user.gender.lowercased() == "male" ? "male_icon" : "Female_icon")
-                                    .resizable()
-                                    .aspectRatio(contentMode: .fill)
-                                    .frame(width: 65, height: 65)
-                                    .clipShape(Circle())
-                                    .overlay(
-                                        Circle()
-                                            .stroke(AppTheme.shade2, lineWidth: 2)
-                                    )
-                            }
+                        WebImage(url: url) { image in
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                        } placeholder: {
+                            Image(user.gender.lowercased() == "male" ? "male_icon" : "Female_icon")
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .frame(width: 65, height: 65)
                         }
+                        .indicator(.activity)
+                        .transition(.opacity)
+                            .frame(width: 65, height: 65)
+                            .clipShape(Circle())
+                            .overlay(
+                                Circle()
+                                    .stroke(AppTheme.shade2, lineWidth: 2)
+                            )
                     } else {
                         // Default gradient placeholder based on gender - matching Android design
                         Image(user.gender.lowercased() == "male" ? "male_icon" : "Female_icon")
@@ -104,31 +85,32 @@ struct OnlineUserRow: View {
             .padding(.top, 10)
             .padding(.bottom, 10)
             
-            // Content section - username and gender info
-            VStack(alignment: .leading, spacing: 5) {
-                // Username - matching Android 16sp with theme colors
+            // Content section - centered vertically
+            VStack(alignment: .leading, spacing: 4) {
+                Spacer() // Top spacer for vertical centering
+                
+                // Username
                 Text(user.name)
-                    .font(.system(size: 16, weight: .regular))
+                    .font(.system(size: 16, weight: .medium))
                     .foregroundColor(AppTheme.darkText)
                     .lineLimit(1)
-                    .padding(.top, 18)
                 
-                // Gender section - matching Android LinearLayout with icon + text
+                // Gender section
                 HStack(spacing: 5) {
-                    // Gender icon - sized to match text height
+                    // Gender icon
                     Image(user.gender.lowercased() == "male" ? "male_symbol" : "female_symbol")
                         .resizable()
                         .aspectRatio(contentMode: .fit)
-                        .frame(width: 16, height: 16)
+                        .frame(width: 14, height: 14)
                         .padding(.top, 1)
                     
-                    // Gender text - increased size with title case and Android color matching
+                    // Gender text
                     Text(user.gender.capitalized)
-                        .font(.system(size: 16, weight: .regular))
+                        .font(.system(size: 13, weight: .medium))
                         .foregroundColor(user.gender.lowercased() == "male" ? AppTheme.darkBlue : AppTheme.warningOrange)
                 }
                 
-                Spacer()
+                Spacer() // Bottom spacer for vertical centering
             }
             .padding(.leading, 20)
             .padding(.trailing, 15)
@@ -354,50 +336,24 @@ struct OnlineUserDetailView: View, Hashable {
         ScrollView {
             VStack(spacing: 20) {
                 if let url = URL(string: user.profileImage), !user.profileImage.isEmpty {
-                    AsyncImage(url: url) { phase in
-                        switch phase {
-                        case .empty:
-                            ProgressView()
-                                .frame(width: 65, height: 65)
-                        case .success(let image):
-                            image
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: 65, height: 65)
-                                .clipShape(Circle())
-                                .overlay(
-                                    Circle()
-                                        .stroke(AppTheme.shade2, lineWidth: 2)
-                                )
-                                .onAppear {
-                                    AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "detail profile image loaded")
-                                }
-                        case .failure(let error):
-                            // Gender-based gradient placeholder while image loads - matching Android design
-                            Image(user.gender.lowercased() == "male" ? "male_icon" : "Female_icon")
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: 65, height: 65)
-                                .clipShape(Circle())
-                                .overlay(
-                                    Circle()
-                                        .stroke(AppTheme.shade2, lineWidth: 2)
-                                )
-                                .onAppear {
-                                    AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "detail profile image failed: \(error.localizedDescription)")
-                                }
-                        @unknown default:
-                            Image(user.gender.lowercased() == "male" ? "male_icon" : "Female_icon")
-                                .resizable()
-                                .aspectRatio(contentMode: .fill)
-                                .frame(width: 65, height: 65)
-                                .clipShape(Circle())
-                                .overlay(
-                                    Circle()
-                                        .stroke(AppTheme.shade2, lineWidth: 2)
-                                )
-                        }
+                    WebImage(url: url) { image in
+                        image
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    } placeholder: {
+                        Image(user.gender.lowercased() == "male" ? "male_icon" : "Female_icon")
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: 65, height: 65)
                     }
+                    .indicator(.activity)
+                    .transition(.opacity)
+                        .frame(width: 65, height: 65)
+                        .clipShape(Circle())
+                        .overlay(
+                            Circle()
+                                .stroke(AppTheme.shade2, lineWidth: 2)
+                        )
                 } else {
                     // Default gradient placeholder based on gender - matching Android design
                     Image(user.gender.lowercased() == "male" ? "male_icon" : "Female_icon")
@@ -443,12 +399,20 @@ struct OnlineUserDetailView: View, Hashable {
 }
 
 struct OnlineUsersView: View {
-    @StateObject private var viewModel = OnlineUsersViewModel()
+    @ObservedObject var viewModel: OnlineUsersViewModel
     @State private var showApps = false
     @State private var navigateToFilters = false
     @State private var showRefreshLimitPopup: Bool = false
     @State private var refreshLimitResult: FeatureLimitResult?
     @State private var showSubscriptionView: Bool = false
+    
+    // Use AppStorage for persistent state that survives tab switching
+    @AppStorage("onlineUsersView_hasInitiallyLoaded") private var hasInitiallyLoaded = false
+    
+    // Default initializer for backwards compatibility
+    init(viewModel: OnlineUsersViewModel? = nil) {
+        self.viewModel = viewModel ?? OnlineUsersViewModel()
+    }
     
     // Android parity: Add subscription manager instance
     private let subscriptionManager = SubscriptionSessionManager.shared
@@ -581,13 +545,24 @@ struct OnlineUsersView: View {
                         onFiltersApplied: { filters in
                             AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "filterApplied() - New filter applied from FiltersView")
                             
-                            // CRITICAL FIX: Use the new refreshFiltersFromSessionManager method
-                            // This will load filters directly from UserSessionManager where FiltersView saved them
-                            viewModel.refreshFiltersFromSessionManager()
+                            // FIXED: Apply filters directly without external refresh mechanism
+                            // This prevents unnecessary Firebase calls and simplifies the flow
+                            let newFilter = OnlineUserFilter(
+                                male: filters["gender"] as? String == "Male" || filters["gender"] as? String == "Both",
+                                female: filters["gender"] as? String == "Female" || filters["gender"] as? String == "Both",
+                                country: filters["country"] as? String ?? "",
+                                language: filters["language"] as? String ?? "",
+                                minAge: filters["min_age"] as? Int != nil ? String(filters["min_age"] as! Int) : "",
+                                maxAge: filters["max_age"] as? Int != nil ? String(filters["max_age"] as! Int) : "",
+                                nearby: (filters["online_only"] as? Bool == true) ? "yes" : ""
+                            )
+                            viewModel.applyFilter(newFilter)
                         },
                         onFiltersCleared: {
-                            AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "filterCleared() - Filters cleared from FiltersView")
-                            viewModel.clearFilter()
+                            AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "filterCleared() - Filters reset (no data reload)")
+                            // FIXED: Only clear filter state, no data changes whatsoever
+                            // User list remains exactly the same, user must apply/refresh for changes
+                            viewModel.clearFilterLocallyOnly()
                         }
                     ),
                     isActive: $navigateToFilters
@@ -611,11 +586,27 @@ struct OnlineUsersView: View {
                 AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - Current users count: \(viewModel.users.count)")
                 AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - isLoading: \(viewModel.isLoading)")
                 AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - hasMore: \(viewModel.hasMore)")
+                AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - hasInitiallyLoaded: \(hasInitiallyLoaded)")
                 
-                // Android parity: Always call fetchUsers which will handle refresh time logic internally
-                // This matches Android OnlineUserListFragment behavior exactly
-                AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - Calling fetchUsers with Android parity logic")
-                viewModel.fetchUsers()
+                // FIXED: Only set hasInitiallyLoaded to true if we actually have data
+                // This ensures we keep trying to load data until we have some
+                if !hasInitiallyLoaded || viewModel.users.isEmpty {
+                    AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - First time loading or no data present, checking if data load needed")
+                    
+                    // Use proper initial load method that respects data state and 30-minute logic
+                    AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - Calling initialLoadIfNeeded")
+                    viewModel.initialLoadIfNeeded()
+                    
+                    // Only set the flag to true if we actually have data now
+                    if !viewModel.users.isEmpty {
+                        hasInitiallyLoaded = true
+                        AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - Data loaded successfully, setting hasInitiallyLoaded to true")
+                    } else {
+                        AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - No data loaded yet, will retry on next view appearance")
+                    }
+                } else {
+                    AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - Already loaded before with data (\(viewModel.users.count) users), skipping reload")
+                }
             }
 
             .sheet(isPresented: $showApps) {
@@ -725,5 +716,5 @@ struct OnlineUsersView: View {
 }
 
 #Preview {
-    OnlineUsersView()
+    OnlineUsersView(viewModel: OnlineUsersViewModel())
 } 

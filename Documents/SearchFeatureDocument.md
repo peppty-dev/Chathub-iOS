@@ -8,11 +8,118 @@ The ChatHub iOS Search Feature is a sophisticated user discovery system that ena
 
 **Technical Architecture**: Built on SessionManager for configuration persistence, BackgroundTimerManager for real-time cooldown processing, and SearchAnalytics for business intelligence. Features precision timer system with millisecond-accurate cooldown expiration, dual-timer UI architecture, and cross-platform analytics with iOS-specific event naming.
 
-## 1. Overview
+## 1. Step-by-Step Search Limit Flow
+
+This section provides a complete step-by-step breakdown of how the search limit popup system works from user interaction to completion.
+
+### **STEP 1: User Action**
+- User enters search query and taps **Search** or uses search button in FiltersView
+
+### **STEP 2: Check Search Limits**
+- System calls `SearchLimitManager.shared.checkSearchLimit()`
+- Performs 6-layer validation (detailed below)
+
+### **STEP 3: Validation Layer 1 - Auto-Reset Check**
+- Check if cooldown expired globally
+- ✅ **Expired**: Auto-reset count to 0 → Allow search, no popup
+- ❌ **Active**: Continue validation
+
+### **STEP 4: Validation Layer 2 - Lite Subscription**
+- Check `subscriptionSessionManager.hasLiteAccess()`
+- ✅ **Lite+ User**: Bypass all limits → Allow search, no popup
+- ❌ **Free User**: Continue validation
+
+### **STEP 5: Validation Layer 3 - New User Grace**
+- Check if user is in new user free period
+- ✅ **New User**: Bypass limits → Allow search, no popup
+- ❌ **Regular User**: Continue validation
+
+### **STEP 6: Validation Layer 4 - Usage Count**
+- Get current search count: `getCurrentUsageCount()`
+- Get limit from config: `getLimit()` (e.g., 3 searches)
+- Check: `currentUsage >= limit`
+
+### **STEP 7: Validation Layer 5 - Fresh Reset**
+- If auto-reset just happened in Step 3
+- ✅ **Just Reset**: Allow immediate search, no popup
+- ❌ **No Reset**: Continue to decision
+
+### **STEP 8: Decision Point**
+- **Always-Show Strategy**: Always show popup regardless of usage
+- Display SearchLimitPopupView with countdown and subscription options
+
+### **STEP 9: Popup Content**
+- **Title**: "Search"
+- **Description**: Current usage and limit information
+- **Progress Bar**: Lite gradient countdown timer
+- **Button Options**: "Search" + "Subscribe to Lite"
+- **Usage Display**: "X of Y searches used"
+
+### **STEP 10: Popup Timer System**
+- **UI Timer**: Updates every 0.1 seconds
+- **Background Timer**: Safety check every 1 second
+- **Progress Bar**: Animates countdown visually
+
+### **STEP 11: User Interaction**
+- **Option A**: User taps "Search" → Proceed if within limits
+- **Option B**: User taps "Subscribe to Lite" → Navigate to subscription
+- **Option C**: User taps background → Dismiss popup
+- **Option D**: User waits → Timer counts down
+
+### **STEP 12A: SEARCH ALLOWED PATH**
+- If within limits (`currentUsage < limit`):
+- Call `SearchLimitManager.shared.performSearch()`
+- Increment usage count: `currentUsage + 1`
+- Start cooldown if limit reached
+- Execute search successfully
+- Track analytics: `trackSearchSuccessful()`
+
+### **STEP 12B: SEARCH BLOCKED PATH**
+- If limit reached (`currentUsage >= limit`):
+- Show "Limit reached" message in popup
+- User must wait for cooldown or subscribe
+- Track analytics: `trackSearchBlocked()`
+
+### **STEP 13: Timer Expiration**
+- When countdown reaches 0:
+- Call `resetCooldown()` globally
+- Set search count back to 0
+- Update popup UI to allow fresh searches
+- User can now search again
+
+### **STEP 14: Reset Mechanism**
+- **What Resets**: Global search count (not per-user)
+- **When**: Only when cooldown time expires
+- **Storage**: `UserDefaults` global keys
+- **Security**: Cannot be bypassed by app restart
+
+### **STEP 15: Global Usage Tracking**
+```
+All searches count toward single global limit:
+Search 1: Count = 1/3
+Search 2: Count = 2/3
+Search 3: Count = 3/3 (Limit reached - show wait message)
+Search 4: Blocked until cooldown expires
+```
+
+### **STEP 16: Analytics Tracking**
+- Track popup shown: `trackSearchLimitPopupShown()`
+- Track button taps: `trackSubscriptionButtonTapped()`
+- Track popup dismissals: `trackPopupDismissed()`
+- Track search success/blocked: `trackSearchSuccessful()/trackSearchBlocked()`
+
+### **🎯 Quick Summary**
+1. **Search Action** → 2. **6-Layer Validation** → 3. **Always Show Popup** → 4. **User Choice** → 5. **Allow/Block Search** → 6. **Timer/Reset** → 7. **Fresh Searches**
+
+**Key Point**: Search limits are **global** (unlike message limits which are per-user)!
+
+---
+
+## 2. Overview
 
 This document describes the **current implementation** of the Search Feature in the ChatHub iOS application. The feature allows users to search for specific people by username, implementing a freemium model with usage limits for non-premium users and unlimited access for Lite subscribers.
 
-### 1.1 Feature Status
+### 2.1 Feature Status
 
 **Current Status**: ✅ **Fully Operational** - All search functionality is working correctly with complete parity across Refresh and Filter features.
 
@@ -86,7 +193,7 @@ This document describes the **current implementation** of the Search Feature in 
 
 #### 1.1.7 User Experience Optimization (Real-Time Enhanced) ✅
 - **Consistent Limits**: 2 searches provides balanced experience matching other features
-- **Clear Feedback**: Search popup shows exact remaining count and cooldown timing with progress bar
+- **Clear Feedback**: Search popup shows exact remaining count and cooldown timing with Lite subscription gradient progress bar
 - **Lite Focus**: "Subscribe to Lite" messaging with star icon for clear upgrade path
 - **Instant Results**: Real-time search execution with loading states and empty state handling
 - **Visual Consistency**: Green gradient buttons and shade2 background matching refresh/filter popups exactly
@@ -325,7 +432,7 @@ Button("Search Users") {
 **Cooldown State** (User exceeded limit):
 ```swift
 // Search button completely hidden (no disabled states)
-// Progress bar with precise countdown timer
+// Progress bar with precise countdown timer (Lite subscription gradient colors)
 // Only subscription button visible
 // Description: "You've reached your limit of X free searches. Subscribe to Lite..."
 ```
