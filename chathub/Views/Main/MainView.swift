@@ -7,6 +7,7 @@ struct MainView: View {
     @State private var showSubscriptionView = false
     @StateObject private var badgeManager = InAppNotificationBadgeManager.shared
     @State private var isSearchFocused = false
+    @ObservedObject private var ratingService = RatingService.shared
     
     // CRITICAL FIX: Move OnlineUsersViewModel to MainView level to persist across tab switches
     @StateObject private var onlineUsersViewModel = OnlineUsersViewModel()
@@ -145,7 +146,7 @@ struct MainView: View {
             .overlay(
                 // ANDROID PARITY: Rating popup (shows when returning from MessagesView)
                 Group {
-                    if RatingService.shared.showRatingDialog {
+                    if ratingService.showRatingDialog {
                         RatingPopupView()
                     }
                 }

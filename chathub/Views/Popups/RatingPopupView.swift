@@ -16,11 +16,6 @@ struct RatingPopupView: View {
             Color.black.opacity(0.6)
                 .ignoresSafeArea(.all, edges: .all)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .onTapGesture {
-                    // Allow dismissal by tapping background
-                    AppLogger.log(tag: "LOG-APP: RatingPopupView", message: "background tapped - dismissing rating dialog")
-                    ratingService.cancelRatingDialog()
-                }
             
             // Main dialog container (following RefreshPopupView structure)
             VStack {

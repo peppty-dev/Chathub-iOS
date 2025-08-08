@@ -7,8 +7,8 @@ struct MyProfileView: View {
     @State private var isLoading: Bool = false
     @State private var errorMessage: String? = nil
     // Note: Removed showCheckoutProfile - no longer needed after ProfileDetailsView removal
-    @State private var showEditProfile: Bool = false
     @State private var showPhotoViewer: Bool = false
+    @State private var cachedProfileModel: ProfileModel? = nil
     
     // User session data
     @State private var userId: String = ""
@@ -43,10 +43,20 @@ struct MyProfileView: View {
                             .resizable()
                             .aspectRatio(contentMode: .fill)
                     } placeholder: {
-                        Image(gender == "Male" ? "male" : "female")
-                            .resizable()
-                            .aspectRatio(contentMode: .fill)
-                            .frame(width: 120, height: 120)
+                        ZStack {
+                            Circle()
+                                .fill(
+                                    LinearGradient(
+                                        colors: [Color("shade3"), Color("shade4")],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                            Image(gender == "Male" ? "male" : "female")
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .opacity(0.8)
+                        }
                     }
                     .onSuccess { image, data, cacheType in
                         AppLogger.log(tag: "LOG-APP: MyProfileView", message: "profileImage loaded successfully from \(cacheType == .memory ? "memory" : cacheType == .disk ? "disk" : "network")")
@@ -54,46 +64,67 @@ struct MyProfileView: View {
                     .onFailure { error in
                         AppLogger.log(tag: "LOG-APP: MyProfileView", message: "profileImage loading failed: \(error.localizedDescription)")
                     }
-                    .frame(width: 120, height: 120)
+                    .frame(width: 160, height: 160)
                     .clipShape(Circle())
                     .overlay(
                         Circle()
-                            .stroke(AppTheme.shade2, lineWidth: 3)
+                            .strokeBorder(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.8),
+                                        Color("shade3").opacity(0.6)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 3
+                            )
+                    )
+                    .overlay(
+                        Circle()
+                            .strokeBorder(
+                                Color.white.opacity(0.3),
+                                lineWidth: 1
+                            )
+                            .padding(1)
                     )
                 }
                 .buttonStyle(PlainButtonStyle())
                 
                 // User Name
-                VStack(spacing: 8) {
-                    Text(Profanity.share.removeProfanityNumbersAllowed(userName))
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundColor(Color.primary)
-                        .lineLimit(2)
-                        .multilineTextAlignment(.center)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 10)
-                .background(Color("Background Color"))
-                .cornerRadius(10)
-                .padding(.horizontal)
+                Text(Profanity.share.removeProfanityNumbersAllowed(userName))
+                    .font(.system(size: 26, weight: .bold))
+                    .foregroundColor(Color("dark"))
+                    .lineLimit(2)
+                    .multilineTextAlignment(.center)
             }
             
             // User Details Collection View
             if !userDetails.isEmpty {
-                LazyVGrid(columns: [
-                    GridItem(.adaptive(minimum: 100), spacing: 8)
-                ], spacing: 8) {
-                    ForEach(userDetails.indices, id: \.self) { index in
-                        Text(userDetails[index])
-                            .font(.system(size: 14, weight: .medium))
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(Color("shade2"))
-                            .cornerRadius(20)
-                            .foregroundColor(Color.primary)
+                VStack(spacing: 16) {
+                    if #available(iOS 16.0, *) {
+                        FlowLayout(spacing: 12) {
+                            ForEach(userDetails, id: \.self) { detail in
+                                EnhancedUserDetailChip(detail: detail)
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                    } else {
+                        VStack(spacing: 12) {
+                            ForEach(Array(stride(from: 0, to: userDetails.count, by: 2)), id: \.self) { index in
+                                HStack(spacing: 12) {
+                                    EnhancedUserDetailChip(detail: userDetails[index])
+                                    if index + 1 < userDetails.count {
+                                        EnhancedUserDetailChip(detail: userDetails[index + 1])
+                                    } else {
+                                        Spacer()
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.horizontal, 20)
                     }
                 }
-                .padding(.horizontal, 10)
             }
             
             // Profile details are now part of main view - no separate details needed
@@ -104,45 +135,27 @@ struct MyProfileView: View {
     }
 
     var body: some View {
-        NavigationView {
-            VStack(spacing: 0) {
-                if isLoading && userName.isEmpty && profileImage.isEmpty {
-                    // Only show loading when there's no existing profile data from database - prevents flicker
-                    ProgressView()
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if let error = errorMessage {
-                    Text(error)
-                        .foregroundColor(.red)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    ScrollView {
-                        profileContentView()
-                    }
-                }
-            }
-            .navigationTitle("Profile")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("Edit") {
-                        showEditProfile = true
-                    }
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(Color("blue"))
+        VStack(spacing: 0) {
+            if isLoading && userName.isEmpty && profileImage.isEmpty {
+                // Only show loading when there's no existing profile data from database - prevents flicker
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let error = errorMessage {
+                Text(error)
+                    .foregroundColor(.red)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    profileContentView()
                 }
             }
         }
+        .navigationTitle("Profile")
+        .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(false)
         // Note: Removed ProfileDetailsView sheet - no longer needed after feature removal
         .background(
             VStack {
-                NavigationLink(
-                    destination: EditProfileView(),
-                    isActive: $showEditProfile
-                ) {
-                    EmptyView()
-                }
-                .hidden()
-                
                 NavigationLink(
                     destination: PhotoViewerView(
                         imageUrl: profileImage,
@@ -189,6 +202,7 @@ struct MyProfileView: View {
         }
         
         // Use ProfileDB caching mechanism exactly like ProfileView (Android Parity)
+        // Always show cached data first (if available) and refresh from Firebase every time
         await loadUserProfileFromDB()
     }
     
@@ -224,24 +238,13 @@ struct MyProfileView: View {
             let currentTime = Int(Date().timeIntervalSince1970)
             let profileAge = currentTime - localProfile.Time
             
-            if profileAge < 3600 {
-                // Data is fresh, use it immediately (no loading state needed)
-                AppLogger.log(tag: "LOG-APP: MyProfileView", message: "loadUserProfileFromDB() using fresh local data, age: \(profileAge) seconds - showing immediately")
-                await MainActor.run {
-                    self.updateUIFromProfile(localProfile)
-                    self.isLoading = false
-                }
-            } else {
-                // Data is expired, show it immediately but fetch new data in background
-                AppLogger.log(tag: "LOG-APP: MyProfileView", message: "loadUserProfileFromDB() using expired local data, showing immediately then refreshing. Age: \(profileAge) seconds")
-                await MainActor.run {
-                    self.updateUIFromProfile(localProfile)
-                    self.isLoading = false
-                }
-                
-                // Fetch fresh data in background (silent refresh)
-                await fetchProfileFromFirebaseAndSave()
+            // Show local data immediately (fresh or expired), then refresh from Firebase
+            AppLogger.log(tag: "LOG-APP: MyProfileView", message: "loadUserProfileFromDB() showing local data, age: \(profileAge) seconds, then refreshing from Firebase")
+            await MainActor.run {
+                self.updateUIFromProfile(localProfile)
+                self.isLoading = false
             }
+            await fetchProfileFromFirebaseAndSave()
         } else {
             // No local data, show loading and fetch from Firebase
             AppLogger.log(tag: "LOG-APP: MyProfileView", message: "loadUserProfileFromDB() no local data found for current user, showing loading and fetching from Firebase")
@@ -264,11 +267,20 @@ struct MyProfileView: View {
                 // Save to local database using ProfileDB (Android Parity)
                 await saveProfileToLocalDatabase(data)
                 
-                // Update UI from fresh data
-                await MainActor.run {
-                    self.updateUIFromFirebaseData(data)
-                    self.isLoading = false
-                    AppLogger.log(tag: "LOG-APP: MyProfileView", message: "fetchProfileFromFirebaseAndSave() UI updated successfully for current user")
+                // Update UI from LOCAL DATABASE to ensure full consistency with ProfileView
+                if let profileDB = profileDB, let localProfile = profileDB.query(UserId: userId) {
+                    await MainActor.run {
+                        self.updateUIFromProfile(localProfile)
+                        self.isLoading = false
+                        AppLogger.log(tag: "LOG-APP: MyProfileView", message: "fetchProfileFromFirebaseAndSave() UI updated from local DB with fresh data")
+                    }
+                } else {
+                    // Fallback: update minimal fields from Firebase data
+                    await MainActor.run {
+                        self.updateUIFromFirebaseData(data)
+                        self.isLoading = false
+                        AppLogger.log(tag: "LOG-APP: MyProfileView", message: "fetchProfileFromFirebaseAndSave() Fallback UI update from Firebase data (ProfileDB not available)")
+                    }
                 }
                 
             } else {
@@ -448,6 +460,7 @@ struct MyProfileView: View {
         country = profile.Country
         language = profile.Language
         profileImage = profile.Image
+        cachedProfileModel = profile
         
         // Update session manager with cached data
         let userSessionManager = UserSessionManager.shared
@@ -459,9 +472,90 @@ struct MyProfileView: View {
         userSessionManager.userProfilePhoto = profile.Image
         userSessionManager.synchronize()
         
-        buildUserDetails()
+        buildAllDetailsFromProfileModel(profile)
         
         AppLogger.log(tag: "LOG-APP: MyProfileView", message: "updateUIFromProfile() updated UI from cached profile data for: \(userName)")
+    }
+
+    private func buildAllDetailsFromProfileModel(_ profile: ProfileModel) {
+        var details: [String] = []
+        // Email verified
+        if profile.EmailVerified.lowercased() == "true" { details.append("Email Verified") }
+        // Created time
+        if !profile.CreatedTime.isEmpty && profile.CreatedTime != "null" {
+            if let time = Double(profile.CreatedTime) {
+                let date = time > 1000000000 ? Date(timeIntervalSince1970: time) : Date(timeIntervalSince1970: time * 86400)
+                let formatter = DateFormatter()
+                formatter.dateFormat = "dd MMM yyyy"
+                let dateString = formatter.string(from: date)
+                let days = Int(Date().timeIntervalSince(date) / 86400)
+                details.append("Created: \(dateString)")
+                details.append("\(days) days old")
+            }
+        }
+        // Platform
+        if !profile.Platform.isEmpty && profile.Platform != "null" {
+            details.append(profile.Platform.lowercased() == "ios" ? "iPhone" : "Android")
+        }
+        // Age
+        if !profile.Age.isEmpty && profile.Age != "null" && profile.Age != "99" { details.append("\(profile.Age) Years old") }
+        // Gender, Language, City, Country
+        if !profile.Gender.isEmpty && profile.Gender != "null" { details.append(profile.Gender) }
+        if !profile.Language.isEmpty && profile.Language != "null" { details.append(profile.Language) }
+        if !profile.city.isEmpty && profile.city != "null" { details.append("Around \(profile.city)") }
+        if !profile.Country.isEmpty && profile.Country != "null" { details.append(profile.Country) }
+        // Height, Occupation, Hobbies, Zodiac
+        if !profile.Height.isEmpty && profile.Height != "null" { details.append(Profanity.share.removeProfanityNumbersAllowed(profile.Height)) }
+        if !profile.Occupation.isEmpty && profile.Occupation != "null" { details.append(Profanity.share.removeProfanity(profile.Occupation)) }
+        if !profile.Hobbies.isEmpty && profile.Hobbies != "null" { details.append(Profanity.share.removeProfanity(profile.Hobbies)) }
+        if !profile.Zodic.isEmpty && profile.Zodic != "null" { details.append(Profanity.share.removeProfanity(profile.Zodic)) }
+        // Relationship prefs
+        if profile.men.lowercased() == "yes" { details.append("I like men") }
+        if profile.women.lowercased() == "yes" { details.append("I like woman") }
+        if profile.single.lowercased() == "yes" { details.append("Single") }
+        if profile.married.lowercased() == "yes" { details.append("Married") }
+        if profile.children.lowercased() == "yes" { details.append("Have Kids") }
+        // Lifestyle
+        if profile.gym.lowercased() == "yes" { details.append("Gym") }
+        if profile.smoke.lowercased() == "yes" { details.append("Smokes") }
+        if profile.drink.lowercased() == "yes" { details.append("Drinks") }
+        if profile.games.lowercased() == "yes" { details.append("I play games") }
+        if profile.decenttalk.lowercased() == "yes" { details.append("Strictly decent chats please") }
+        // Interests
+        if profile.pets.lowercased() == "yes" { details.append("I love pets") }
+        if profile.travel.lowercased() == "yes" { details.append("I travel") }
+        if profile.music.lowercased() == "yes" { details.append("I love music") }
+        if profile.movies.lowercased() == "yes" { details.append("I love movies") }
+        if profile.naughty.lowercased() == "yes" { details.append("I am naughty") }
+        if profile.Foodie.lowercased() == "yes" { details.append("Foodie") }
+        if profile.dates.lowercased() == "yes" { details.append("I go on dates") }
+        if profile.fashion.lowercased() == "yes" { details.append("I love fashion") }
+        // Emotional
+        if profile.broken.lowercased() == "yes" { details.append("Broken") }
+        if profile.depressed.lowercased() == "yes" { details.append("Depressed") }
+        if profile.lonely.lowercased() == "yes" { details.append("Lonely") }
+        if profile.cheated.lowercased() == "yes" { details.append("I got cheated") }
+        if profile.insomnia.lowercased() == "yes" { details.append("I can't sleep") }
+        // Permissions
+        if profile.voice.lowercased() == "yes" { details.append("Voice calls allowed") }
+        if profile.video.lowercased() == "yes" { details.append("Video calls allowed") }
+        if profile.pics.lowercased() == "yes" { details.append("Pictures allowed") }
+        // Stats
+        if !profile.voicecalls.isEmpty && profile.voicecalls != "0" { details.append("\(profile.voicecalls) voice calls") }
+        if !profile.videocalls.isEmpty && profile.videocalls != "0" { details.append("\(profile.videocalls) video calls") }
+        if !profile.goodexperience.isEmpty && profile.goodexperience != "0" { details.append("\(profile.goodexperience) thumbs up") }
+        if !profile.badexperience.isEmpty && profile.badexperience != "0" { details.append("\(profile.badexperience) thumbs down") }
+        if !profile.male_accounts.isEmpty && profile.male_accounts != "0" { details.append("\(profile.male_accounts) male accounts") }
+        if !profile.female_accounts.isEmpty && profile.female_accounts != "0" { details.append("\(profile.female_accounts) female accounts") }
+        if !profile.male_chats.isEmpty && profile.male_chats != "0" { details.append("\(profile.male_chats) male chats") }
+        if !profile.female_chats.isEmpty && profile.female_chats != "0" { details.append("\(profile.female_chats) female chats") }
+        if !profile.reports.isEmpty && profile.reports != "0" { details.append("\(profile.reports) reports") }
+        if !profile.blocks.isEmpty && profile.blocks != "0" { details.append("\(profile.blocks) blocks") }
+        // Socials
+        if !profile.Snapchat.isEmpty && profile.Snapchat != "null" { details.append("Snap: \(Profanity.share.removeProfanityNumbersAllowed(profile.Snapchat))") }
+        if !profile.Instagram.isEmpty && profile.Instagram != "null" { details.append("Insta: \(Profanity.share.removeProfanityNumbersAllowed(profile.Instagram))") }
+        
+        self.userDetails = details
     }
     
     private func updateUIFromFirebaseData(_ data: [String: Any]) {
@@ -503,20 +597,99 @@ struct MyProfileView: View {
     private func buildUserDetails() {
         userDetails.removeAll()
         
-        if !age.isEmpty && age != "99" {
-            userDetails.append("\(age) Years")
+        // Email verified
+        if let emailVerified = getValue("email_verified"), emailVerified.lowercased() == "true" {
+            userDetails.append("Email Verified")
         }
-        if !gender.isEmpty {
-            userDetails.append(gender)
+        // Created time
+        if let created = getValue("User_registered_time"), !created.isEmpty {
+            if let timeInterval = Double(created) {
+                let date = timeInterval > 1000000000 ? Date(timeIntervalSince1970: timeInterval) : Date(timeIntervalSince1970: timeInterval * 86400)
+                let formatter = DateFormatter()
+                formatter.dateFormat = "dd MMM yyyy"
+                let dateString = formatter.string(from: date)
+                let days = Int(Date().timeIntervalSince(date) / 86400)
+                userDetails.append("Created: \(dateString)")
+                userDetails.append("\(days) days old")
+            }
         }
-        if !country.isEmpty {
-            userDetails.append(country)
+        // Platform
+        if let platform = getValue("platform"), !platform.isEmpty, platform != "null" {
+            userDetails.append(platform.lowercased() == "ios" ? "iPhone" : "Android")
         }
-        if !language.isEmpty {
-            userDetails.append(language)
-        }
-        
+        // Age
+        if !age.isEmpty && age != "null" && age != "99" { userDetails.append("\(age) Years old") }
+        // Gender
+        if !gender.isEmpty && gender != "null" { userDetails.append(gender) }
+        // Language
+        if !language.isEmpty && language != "null" { userDetails.append(language) }
+        // City
+        if let city = getValue("city"), !city.isEmpty && city != "null" { userDetails.append("Around \(city)") }
+        // Country
+        if !country.isEmpty && country != "null" { userDetails.append(country) }
+        // Height
+        if let height = getValue("height"), !height.isEmpty && height != "null" { userDetails.append(Profanity.share.removeProfanityNumbersAllowed(height)) }
+        // Occupation
+        if let occupation = getValue("occupation"), !occupation.isEmpty && occupation != "null" { userDetails.append(Profanity.share.removeProfanity(occupation)) }
+        // Hobbies
+        if let hobbies = getValue("hobbies"), !hobbies.isEmpty && hobbies != "null" { userDetails.append(Profanity.share.removeProfanity(hobbies)) }
+        // Zodiac
+        if let zodiac = getValue("zodiac"), !zodiac.isEmpty && zodiac != "null" { userDetails.append(Profanity.share.removeProfanity(zodiac)) }
+        // Relationship prefs
+        if let likeMen = getValue("like_men"), likeMen.lowercased() == "yes" { userDetails.append("I like men") }
+        if let likeWoman = getValue("like_woman"), likeWoman.lowercased() == "yes" { userDetails.append("I like woman") }
+        if let single = getValue("single"), single.lowercased() == "yes" { userDetails.append("Single") }
+        if let married = getValue("married"), married.lowercased() == "yes" { userDetails.append("Married") }
+        if let children = getValue("children"), children.lowercased() == "yes" { userDetails.append("Have Kids") }
+        // Lifestyle
+        if let gym = getValue("gym"), gym.lowercased() == "yes" { userDetails.append("Gym") }
+        if let smokes = getValue("smokes"), smokes.lowercased() == "yes" { userDetails.append("Smokes") }
+        if let drinks = getValue("drinks"), drinks.lowercased() == "yes" { userDetails.append("Drinks") }
+        if let games = getValue("games"), games.lowercased() == "yes" { userDetails.append("I play games") }
+        if let decentChat = getValue("decent_chat"), decentChat.lowercased() == "yes" { userDetails.append("Strictly decent chats please") }
+        // Interests
+        if let pets = getValue("pets"), pets.lowercased() == "yes" { userDetails.append("I love pets") }
+        if let travel = getValue("travel"), travel.lowercased() == "yes" { userDetails.append("I travel") }
+        if let music = getValue("music"), music.lowercased() == "yes" { userDetails.append("I love music") }
+        if let movies = getValue("movies"), movies.lowercased() == "yes" { userDetails.append("I love movies") }
+        if let naughty = getValue("naughty"), naughty.lowercased() == "yes" { userDetails.append("I am naughty") }
+        if let foodie = getValue("foodie"), foodie.lowercased() == "yes" { userDetails.append("Foodie") }
+        if let dates = getValue("dates"), dates.lowercased() == "yes" { userDetails.append("I go on dates") }
+        if let fashion = getValue("fashion"), fashion.lowercased() == "yes" { userDetails.append("I love fashion") }
+        // Emotional states
+        if let broken = getValue("broken"), broken.lowercased() == "yes" { userDetails.append("Broken") }
+        if let depressed = getValue("depressed"), depressed.lowercased() == "yes" { userDetails.append("Depressed") }
+        if let lonely = getValue("lonely"), lonely.lowercased() == "yes" { userDetails.append("Lonely") }
+        if let cheated = getValue("cheated"), cheated.lowercased() == "yes" { userDetails.append("I got cheated") }
+        if let insomnia = getValue("insomnia"), insomnia.lowercased() == "yes" { userDetails.append("I can't sleep") }
+        // Permissions
+        if let voice = getValue("voice_allowed"), voice.lowercased() == "yes" { userDetails.append("Voice calls allowed") }
+        if let video = getValue("video_allowed"), video.lowercased() == "yes" { userDetails.append("Video calls allowed") }
+        if let pics = getValue("pics_allowed"), pics.lowercased() == "yes" { userDetails.append("Pictures allowed") }
+        // Stats
+        if let voiceCalls = getValue("voicecalls"), !voiceCalls.isEmpty, voiceCalls != "0" { userDetails.append("\(voiceCalls) voice calls") }
+        if let videoCalls = getValue("videocalls"), !videoCalls.isEmpty, videoCalls != "0" { userDetails.append("\(videoCalls) video calls") }
+        if let good = getValue("goodexperience"), !good.isEmpty, good != "0" { userDetails.append("\(good) thumbs up") }
+        if let bad = getValue("badexperience"), !bad.isEmpty, bad != "0" { userDetails.append("\(bad) thumbs down") }
+        if let maleAccounts = getValue("male_accounts"), !maleAccounts.isEmpty, maleAccounts != "0" { userDetails.append("\(maleAccounts) male accounts") }
+        if let femaleAccounts = getValue("female_accounts"), !femaleAccounts.isEmpty, femaleAccounts != "0" { userDetails.append("\(femaleAccounts) female accounts") }
+        if let maleChats = getValue("male_chats"), !maleChats.isEmpty, maleChats != "0" { userDetails.append("\(maleChats) male chats") }
+        if let femaleChats = getValue("female_chats"), !femaleChats.isEmpty, femaleChats != "0" { userDetails.append("\(femaleChats) female chats") }
+        if let reports = getValue("reports"), !reports.isEmpty, reports != "0" { userDetails.append("\(reports) reports") }
+        if let blocks = getValue("blocks"), !blocks.isEmpty, blocks != "0" { userDetails.append("\(blocks) blocks") }
+        // Socials
+        if let snap = getValue("snap"), !snap.isEmpty { userDetails.append("Snap: \(Profanity.share.removeProfanityNumbersAllowed(snap))") }
+        if let insta = getValue("insta"), !insta.isEmpty { userDetails.append("Insta: \(Profanity.share.removeProfanityNumbersAllowed(insta))") }
+
         AppLogger.log(tag: "LOG-APP: MyProfileView", message: "buildUserDetails() built \(userDetails.count) detail items")
+    }
+
+    private func getValue(_ key: String) -> String? {
+        // Try from local DB latest cached fields via Session (if mirrored) else rely on UI state values
+        // Since we already copied essential fields to state, this helper is for the extra fields fetched from Firebase and saved to DB
+        // Here we read from UserDefaults via UserSessionManager when mirrored, otherwise return nil
+        // For now, we return nil so details rely on explicit state fields and known keys updated in updateUIFromFirebaseData
+        return nil
     }
     
     // Removed local profanity filter - now using ProfanityService.shared consistently

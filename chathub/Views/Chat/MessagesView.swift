@@ -23,6 +23,7 @@ struct MessagesView: View {
     }
     
     @Environment(\.presentationMode) private var presentationMode
+    @ObservedObject private var badgeManager = InAppNotificationBadgeManager.shared
     
     @State private var messages: [ChatMessage] = []
     @State private var messageText: String = ""
@@ -37,11 +38,18 @@ struct MessagesView: View {
     @FocusState private var isTextEditorFocused: Bool
 
     @State private var showSubscriptionPopup: Bool = false
-    @State private var showInterestsPopup: Bool = false
     @State private var showInterestStatus: Bool = false
     @State private var fullScreenImageURL: String = ""
     @State private var showToast: Bool = false
     @State private var toastMessage: String = ""
+    // Entry Pill (Always-on-entry alternating prompt)
+    private enum EntryPillContent {
+        case interest(phrase: String)
+        case aboutYou(key: String, question: String)
+    }
+    @State private var entryPill: EntryPillContent? = nil
+    @State private var aboutYouValues: [String: String] = [:]
+
     
     // MARK: - Call Implementation (Android Parity)
     @State private var showVoiceCallPopup: Bool = false
@@ -98,6 +106,8 @@ struct MessagesView: View {
     @State private var statusListener: ListenerRegistration? = nil
     @State private var blockListener: ListenerRegistration? = nil
     @State private var liveListener: ListenerRegistration? = nil
+    // Tracks known seen state by message ID to survive DB reloads
+    @State private var messageSeenMap: [String: Bool] = [:]
     
     // Agora video/voice call integration
     @State private var agoraEngine: AgoraRtcEngineKit? = nil
@@ -107,6 +117,8 @@ struct MessagesView: View {
     // Other user details
     @State private var otherUserInterests: [String] = []
     @State private var otherUserLastSeen: Date? = nil
+    @State private var otherUserHereEnterTime: Date? = nil
+    @State private var otherUserHereLeaveTime: Date? = nil
     @State private var otherUserIsOnline: Bool = false
     @State private var otherUserChattingInCurrentChat: Bool = false
     
@@ -206,7 +218,8 @@ struct MessagesView: View {
                     liveOverlayHeight = 0
                 }
             }
-            .transition(AnyTransition.move(edge: .top).combined(with: .opacity))
+            .transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity),
+                                    removal: .move(edge: .bottom).combined(with: .opacity)))
         }
     }
     
@@ -303,8 +316,33 @@ struct MessagesView: View {
     
     private var messageInputView: some View {
         VStack(spacing: 0) {
+            // Always-on-entry pill shown above status/tags
+            if let pill = entryPillView {
+                pill
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity),
+                                            removal: .move(edge: .bottom).combined(with: .opacity)))
+            }
+
             statusAndInterestsView
-            
+
+            // Inline suggestion pill above composer (still supported after send)
+            if entryPill == nil, let pill = pendingInterestSuggestion {
+                HStack {
+                    InterestSuggestionPill(text: pill) {
+                        acceptInterestSuggestion(pill)
+                    } onReject: {
+                        rejectInterestSuggestion(pill)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 10)
+                .padding(.top, 6)
+                .transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity),
+                                        removal: .move(edge: .bottom).combined(with: .opacity)))
+            }
+
             inputBarView
         }
     }
@@ -320,7 +358,7 @@ struct MessagesView: View {
                 
                 // Display interest tags directly beside status
                 ForEach(getInterestTags(), id: \.self) { interest in
-                    Text(interest)
+                    Text(interest.interestDisplayFormatted)
                         .font(.system(size: 12, weight: .bold))
                         .foregroundColor(Color("shade6"))
                         .frame(height: 37)
@@ -359,7 +397,7 @@ struct MessagesView: View {
         HStack {
             Text(capitalizeWords(currentUserStatus))
                 .font(.system(size: 12, weight: .bold))
-                .foregroundColor(.white)
+                .foregroundColor(getStatusTextColor())
                 .lineLimit(1)
                 .multilineTextAlignment(.center)
         }
@@ -724,10 +762,7 @@ struct MessagesView: View {
             }
             
             // MARK: - Interests Popup Overlay (Android Parity)
-            if showInterestsPopup {
-                InterestsPopupView(isPresented: $showInterestsPopup)
-                    .zIndex(999) // Ensure it appears above content but below notification popup
-            }
+            // Removed full-screen InterestsPopupView
             
             // MARK: - Message Limit Popup Overlay
             if showMessageLimitPopup, let result = messageLimitResult {
@@ -749,19 +784,35 @@ struct MessagesView: View {
 
     @ToolbarContentBuilder
     private func toolbarContent() -> some ToolbarContent {
-        // Username positioned next to back button - clickable to open profile
+        // Back button + badge + username with controlled spacing and centered alignment
         ToolbarItem(placement: .navigationBarLeading) {
-            Button(action: {
-                AppLogger.log(tag: "LOG-APP: MessagesView", message: "username tapped - navigating to profile for user: \(otherUser.name)")
-                showUserProfile = true
-            }) {
-                HStack(spacing: 8) {
+            HStack(spacing: 0) {
+                // Back chevron
+                Button(action: { presentationMode.wrappedValue.dismiss() }) {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 17, weight: .medium))
+                        .foregroundColor(Color("ColorAccent"))
+                }
+                .buttonStyle(PlainButtonStyle())
+
+                // Chats badge immediately next to chevron (no gap)
+                if badgeManager.chatsBadgeCount > 0 {
+                    BadgeView(count: badgeManager.chatsBadgeCount)
+                        .padding(.leading, 0)
+                }
+
+                // Username with larger gap from badge
+                Button(action: {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "username tapped - navigating to profile for user: \(otherUser.name)")
+                    showUserProfile = true
+                }) {
                     Text(isAIChat ? "\(otherUser.name)." : otherUser.name)
                         .font(.system(size: 18, weight: .semibold))
                         .foregroundColor(Color("dark"))
+                        .padding(.leading, 12) // larger spacing between badge and username
                 }
+                .buttonStyle(PlainButtonStyle())
             }
-            .buttonStyle(PlainButtonStyle())
         }
         
         // Voice call button (Android Parity Implementation)
@@ -910,7 +961,7 @@ struct MessagesView: View {
         .overlay(overlayViews)
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(false)
+        .navigationBarBackButtonHidden(true)
         .toolbar { toolbarContent() }
         .alert("Permission Required", isPresented: $showPermissionDialog) {
             Button("Cancel", role: .cancel) { }
@@ -966,10 +1017,33 @@ struct MessagesView: View {
                 AppLogger.log(tag: "LOG-APP: MessagesView", message: "MessagesView onAppear() - triggering scroll to bottom with \(messages.count) messages")
             }
         }
-        
-        // MARK: - Time-based Interests Popup Trigger (Android Parity)
-        // Show interests popup every hour like Android MessageTextActivity.onResume()
-        checkTimeBasedInterestsPopup()
+
+        // Prepare entry pill content (alternates between Category A and B)
+        loadAboutYouCacheAndPrepareEntryPill()
+
+        // Update "here" status so other devices can detect we're in this chat (Android parity)
+        updateHereStatus(isActive: true)
+    }
+
+    private func loadAboutYouCacheAndPrepareEntryPill() {
+        let uid = UserSessionManager.shared.userId ?? ""
+        guard !uid.isEmpty else { prepareEntryPill(); return }
+        Firestore.firestore().collection("Users").document(uid).getDocument { doc, _ in
+            var values: [String: String] = [:]
+            if let data = doc?.data() {
+                let keys = [
+                    "married", "children", "smokes", "drinks",
+                    "voice_allowed", "video_allowed", "pics_allowed"
+                ]
+                for k in keys {
+                    if let v = data[k] as? String { values[k] = v }
+                }
+            }
+            self.aboutYouValues = values
+            self.prepareEntryPill()
+            // If we showed something previously and the user ignored it, rotate to next on re-entry
+            if self.entryPill == nil { self.prepareEntryPill() }
+        }
     }
     
     private func handleViewDisappear() {
@@ -996,6 +1070,9 @@ struct MessagesView: View {
         }
         
         isViewBeingDismissed = true
+
+        // Clear "here" status when leaving this chat
+        updateHereStatus(isActive: false)
     
         // Otherwise, the view is likely being popped.
         AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() Performing cleanup and dismissal")
@@ -1296,6 +1373,24 @@ struct MessagesView: View {
         // This is the iOS equivalent of Android's new_message_false() function
         markChatAsRead()
     }
+
+    // MARK: - Here Status Updates (Android Parity)
+    private func updateHereStatus(isActive: Bool) {
+        let myUserId = UserSessionManager.shared.userId ?? ""
+        guard !myUserId.isEmpty else { return }
+        let db = Firestore.firestore()
+        let userRef = db.collection("Users").document(myUserId)
+        let data: [String: Any] = [
+            "current_chat_uid_for_here": isActive ? otherUser.id : "null"
+        ]
+        userRef.setData(data, merge: true) { error in
+            if let error = error {
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "updateHereStatus() Failed to set here status: \(error.localizedDescription)")
+            } else {
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "updateHereStatus() Here status set to \(isActive ? "ACTIVE" : "INACTIVE") for chat with: \(otherUser.id)")
+            }
+        }
+    }
     
     // MARK: - Message Read Status (Android Parity)
     
@@ -1335,64 +1430,51 @@ struct MessagesView: View {
             }
     }
     
-    /// iOS equivalent of Android's MarkAsSeenAsyncTask
-    /// Updates individual message seen status in Firebase to show "seen" status
+    /// Local-only seen handling based on presence windows
     private func markMessagesAsSeen() {
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "markMessagesAsSeen() Marking individual messages as seen - iOS equivalent of Android MarkAsSeenAsyncTask")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "markMessagesAsSeen() Local-only seen marking (no Firebase writes)")
         
-        let batch = Firestore.firestore().batch()
-        var batchOperations = 0
-        
-        // Find messages from other user that are not yet marked as seen
-        let unseenMessages = messages.filter { message in
-            !message.isFromCurrentUser && !message.isMessageSeen
+        if otherUserChattingInCurrentChat {
+            // Other user is currently in this chat → all of our outgoing messages are effectively seen
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "markMessagesAsSeen() Other user HERE → mark all sent messages seen")
+            markSentMessagesAsSeenLocally(upTo: nil)
+            return
         }
         
-        for message in unseenMessages {
-            let messageRef = Firestore.firestore()
-                .collection("Chats")
-                .document(chatId)
-                .collection("Messages")
-                .document(message.id)
-            
-            // Android Parity: Use message_seen field instead of message_read
-            batch.updateData(["message_seen": true], forDocument: messageRef)
-            batchOperations += 1
-            
-            // Firebase batch limit is 500 operations
-            if batchOperations >= 500 {
-                break
-            }
-        }
-        
-        if batchOperations > 0 {
-            batch.commit { error in
-                if let error = error {
-                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "markMessagesAsSeen() Failed to update message seen status: \(error.localizedDescription)")
-                } else {
-                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "markMessagesAsSeen() Successfully marked \(batchOperations) messages as seen")
-                    
-                    // Update local message objects to reflect seen status
-                    DispatchQueue.main.async {
-                        // Update local message seen status immediately for UI consistency
-                        self.updateLocalMessageSeenStatus()
-                        AppLogger.log(tag: "LOG-APP: MessagesView", message: "markMessagesAsSeen() Messages marked as seen in Firebase and locally")
-                    }
-                }
-            }
+        // Otherwise, mark up to their last_time_seen
+        if let lastSeen = otherUserLastSeen {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "markMessagesAsSeen() Using last_time_seen=\(lastSeen) to mark sent messages seen locally")
+            markSentMessagesAsSeenLocally(upTo: lastSeen)
         } else {
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "markMessagesAsSeen() No unseen messages to mark as seen")
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "markMessagesAsSeen() No presence info available; skipping")
         }
     }
     
-    /// Update local message objects to reflect seen status
-    private func updateLocalMessageSeenStatus() {
+    /// Helper: Mark our sent messages as seen locally, optionally only up to a cutoff time
+    private func markSentMessagesAsSeenLocally(upTo cutoff: Date?) {
+        var updatedCount = 0
         for i in 0..<messages.count {
-            if !messages[i].isFromCurrentUser && !messages[i].isMessageSeen {
+            guard messages[i].isFromCurrentUser else { continue }
+            if let cutoff = cutoff, messages[i].timestamp > cutoff { continue }
+            if messages[i].isMessageSeen { continue }
+            messages[i].isMessageSeen = true
+            messageSeenMap[messages[i].id] = true
+            updatedCount += 1
+        }
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "markSentMessagesAsSeenLocally() Marked \(updatedCount) sent messages as seen locally")
+    }
+    
+    /// Update local message objects to reflect seen status for SENT messages only
+    private func updateLocalMessageSeenStatus() {
+        var updated = 0
+        for i in 0..<messages.count {
+            if messages[i].isFromCurrentUser && !messages[i].isMessageSeen {
                 messages[i].isMessageSeen = true
+                messageSeenMap[messages[i].id] = true
+                updated += 1
             }
         }
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "updateLocalMessageSeenStatus() Updated local message seen status")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "updateLocalMessageSeenStatus() Updated local seen status for \(updated) sent messages")
     }
     
     /// Update local database to mark chat as read (Android Parity)
@@ -1496,9 +1578,22 @@ struct MessagesView: View {
         
         // Update UI on main thread
         DispatchQueue.main.async {
+            // Preserve any known seen states already present in the in-memory messages array
+            // Merge seen states from current in-memory array and the persistent seen map
+            var existingSeenById: [String: Bool] = Dictionary(uniqueKeysWithValues: self.messages.map { ($0.id, $0.isMessageSeen) })
+            for (key, value) in self.messageSeenMap { existingSeenById[key] = value }
+            var mergedMessages: [ChatMessage] = chatMessages.map { incoming in
+                var updated = incoming
+                if let knownSeen = existingSeenById[incoming.id] {
+                    updated.isMessageSeen = knownSeen
+                }
+                return updated
+            }
+            
             // ANDROID PARITY: Keep messages in DESC order (newest first) to match Android RecyclerView pattern
             // Database returns DESC order, use inverted scroll pattern for display
-            self.messages = chatMessages.sorted { $0.timestamp > $1.timestamp }
+            mergedMessages.sort { $0.timestamp > $1.timestamp }
+            self.messages = mergedMessages
             self.isLoading = false
             self.isFirstLoad = false
             
@@ -1685,6 +1780,8 @@ struct MessagesView: View {
             MessageLimitManager.shared.performMessageSend { success in
                 if success {
                     AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleSendMessage() Message limit check passed, proceeding with send")
+                    // Precompute interest suggestion before messageText cleared
+                    computeInterestSuggestionIfAny(sentText: text)
                     sendMessage()
                 } else {
                     AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleSendMessage() Message send blocked by limit manager")
@@ -1695,6 +1792,261 @@ struct MessagesView: View {
             // If user can't proceed but popup wasn't shown, there might be an issue
             if !result.showPopup {
                 AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleSendMessage() WARNING: User can't proceed but popup not shown - this shouldn't happen")
+            }
+        }
+    }
+
+    // MARK: - Interest Suggestion Integration
+    @State private var pendingInterestSuggestion: String? = nil
+    private func computeInterestSuggestionIfAny(sentText: String) {
+        let suggestion = InterestSuggestionManager.shared.processOutgoingMessage(chatId: chatId, message: sentText)
+        DispatchQueue.main.async {
+            withAnimation { self.pendingInterestSuggestion = suggestion }
+            if suggestion != nil {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+                    withAnimation { if self.pendingInterestSuggestion == suggestion { self.pendingInterestSuggestion = nil } }
+                }
+            }
+        }
+    }
+
+    private func acceptInterestSuggestion(_ phrase: String) {
+        // Optimistically hide immediately (ask one at a time UX)
+        withAnimation {
+            if case .interest(let p)? = self.entryPill, p.caseInsensitiveCompare(phrase) == .orderedSame {
+                self.entryPill = nil
+            }
+            self.pendingInterestSuggestion = nil
+        }
+        InterestSuggestionManager.shared.acceptInterest(phrase, chatId: chatId) { _ in }
+    }
+
+    private func rejectInterestSuggestion(_ phrase: String) {
+        // Optimistically hide immediately
+        withAnimation {
+            self.pendingInterestSuggestion = nil
+            if case .interest(let p)? = self.entryPill, p.caseInsensitiveCompare(phrase) == .orderedSame {
+                self.entryPill = nil
+            }
+        }
+        InterestSuggestionManager.shared.rejectInterest(phrase, chatId: chatId)
+    }
+
+    // MARK: - Entry Pill Logic (Alternating A/B)
+
+    private func prepareEntryPill() {
+        // Decide alternation based on a simple toggle persisted in UserDefaults
+        let defaults = UserDefaults.standard
+        let lastCategoryA = defaults.bool(forKey: "entry_pill_last_was_A")
+
+        // Attempt preferred category first, then fallback to the other
+        if !lastCategoryA {
+            if let a = nextInterestSuggestionForEntry() {
+                entryPill = .interest(phrase: a)
+                defaults.set(true, forKey: "entry_pill_last_was_A")
+                return
+            } else if let b = nextAboutYouQuestionForEntry() {
+                entryPill = .aboutYou(key: b.key, question: b.question)
+                defaults.set(false, forKey: "entry_pill_last_was_A")
+                return
+            }
+        } else {
+            if let b = nextAboutYouQuestionForEntry() {
+                entryPill = .aboutYou(key: b.key, question: b.question)
+                defaults.set(false, forKey: "entry_pill_last_was_A")
+                return
+            } else if let a = nextInterestSuggestionForEntry() {
+                entryPill = .interest(phrase: a)
+                defaults.set(true, forKey: "entry_pill_last_was_A")
+                return
+            }
+        }
+
+        // If nothing to ask, hide
+        entryPill = nil
+    }
+
+    private func nextInterestSuggestionForEntry() -> String? {
+        // Persisted rotation across visits using an index in UserDefaults
+        let suggestions = InterestSuggestionManager.shared.getSuggestedInterests()
+        guard !suggestions.isEmpty else { return nil }
+
+        let defaults = UserDefaults.standard
+        let indexKey = "entry_pill_interest_index"
+        var startIndex = defaults.integer(forKey: indexKey)
+        if startIndex < 0 || startIndex >= suggestions.count { startIndex = 0 }
+
+        let accepted = Set(SessionManager.shared.interestTags.map { $0.lowercased() })
+
+        var foundIndex: Int? = nil
+        for offset in 0..<suggestions.count {
+            let idx = (startIndex + offset) % suggestions.count
+            let phrase = suggestions[idx]
+            if !accepted.contains(phrase.lowercased()) {
+                foundIndex = idx
+                break
+            }
+        }
+
+        if let idx = foundIndex {
+            // Advance pointer to the next item for future entries
+            defaults.set((idx + 1) % suggestions.count, forKey: indexKey)
+            return suggestions[idx]
+        } else {
+            // Nothing usable (all accepted). Still advance pointer to keep rotation moving.
+            defaults.set((startIndex + 1) % suggestions.count, forKey: indexKey)
+            return nil
+        }
+    }
+
+    private func nextAboutYouQuestionForEntry() -> (key: String, question: String)? {
+        // Consider a subset of yes/no style profile fields from EditProfile
+        // Map Firestore key -> human-readable question
+        let candidates: [(String, String)] = [
+            ("married", "Are you married?"),
+            ("children", "Do you have children?"),
+            ("smokes", "Do you smoke?"),
+            ("drinks", "Do you drink?"),
+            ("voice_allowed", "Do you allow voice calls?"),
+            ("video_allowed", "Do you allow video calls?"),
+            ("pics_allowed", "Do you send pictures?")
+        ]
+
+        let defaults = UserDefaults.standard
+        let indexKey = "entry_pill_about_index"
+        var startIndex = defaults.integer(forKey: indexKey)
+        if startIndex < 0 || startIndex >= candidates.count { startIndex = 0 }
+
+        // Treat empty/null as unanswered
+        for offset in 0..<candidates.count {
+            let idx = (startIndex + offset) % candidates.count
+            let (key, question) = candidates[idx]
+            let current = aboutYouValues[key] ?? ""
+            if current.isEmpty || current == "null" {
+                // Advance pointer to the next item for future entries
+                defaults.set((idx + 1) % candidates.count, forKey: indexKey)
+                return (key, question)
+            }
+        }
+
+        // All answered — still advance pointer to keep rotation moving
+        defaults.set((startIndex + 1) % max(candidates.count, 1), forKey: indexKey)
+        return nil
+    }
+
+    // MARK: - Entry Pill View
+    private var entryPillView: AnyView? {
+        guard let entryPill else { return nil }
+        switch entryPill {
+        case .interest(let phrase):
+            return AnyView(
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Are you interested in")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(.white.opacity(0.95))
+                    Text(phrase.interestDisplayFormatted)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    HStack(spacing: 10) {
+                        Spacer(minLength: 0)
+                        pillChoiceButton(title: "Yes", system: "heart.fill", bg: Color.white.opacity(0.2)) {
+                            acceptInterestSuggestion(phrase)
+                        }
+                        pillChoiceButton(title: "No", system: "xmark", bg: Color.white.opacity(0.15)) {
+                            rejectInterestSuggestion(phrase)
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity)
+                .background(
+                    LinearGradient(
+                        colors: [Color("liteGradientStart"), Color("liteGradientEnd")],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            )
+        case .aboutYou(let key, let question):
+            return AnyView(
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Tell us more about you")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(.white.opacity(0.95))
+                    Text(question)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    HStack(spacing: 10) {
+                        Spacer(minLength: 0)
+                        pillChoiceButton(title: "Yes", system: "heart.fill", bg: Color.white.opacity(0.2)) {
+                            saveAboutYouAnswer(key: key, yes: true)
+                            withAnimation { self.entryPill = nil }
+                        }
+                        pillChoiceButton(title: "No", system: "xmark", bg: Color.white.opacity(0.15)) {
+                            saveAboutYouAnswer(key: key, yes: false)
+                            withAnimation { self.entryPill = nil }
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity)
+                .background(
+                    LinearGradient(
+                        colors: [Color("liteGradientStart"), Color("liteGradientEnd")],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            )
+        }
+    }
+
+    private func pillCircleButton(system: String, bg: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: system)
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(.white)
+                .padding(8)
+                .background(bg)
+                .clipShape(Circle())
+        }
+    }
+
+    private func pillChoiceButton(title: String, system: String, bg: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: system)
+                    .font(.system(size: 12, weight: .bold))
+                Text(title)
+                    .font(.system(size: 12, weight: .bold))
+            }
+            .foregroundColor(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(bg)
+            .clipShape(Capsule())
+        }
+    }
+
+    private func saveAboutYouAnswer(key: String, yes: Bool) {
+        let userId = UserSessionManager.shared.userId ?? ""
+        let value = yes ? "yes" : "no"
+        // Optimistic close (ask one at a time UX)
+        withAnimation { self.entryPill = nil }
+        let db = Firestore.firestore()
+        db.collection("Users").document(userId).setData([key: value], merge: true) { error in
+            if let error = error {
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "saveAboutYouAnswer() error: \(error.localizedDescription)")
+            } else {
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "saveAboutYouAnswer() saved \(key)=\(value)")
             }
         }
     }
@@ -1818,11 +2170,7 @@ struct MessagesView: View {
                         self.checkAndShowNotificationPermissionPopup()
                     }
                     
-                    // MARK: - Interests Popup Trigger (Android Parity)
-                    // Show interests popup when user sends first message (matching Android behavior)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                        self.checkAndShowInterestsPopup()
-                    }
+                    // Removed Interests Popup Trigger
                 }
             }
         
@@ -2052,65 +2400,9 @@ struct MessagesView: View {
         hasShownNotificationPopup = true
     }
     
-    /// Check if we should show interests popup (Android Parity)
-    /// Shows when user sends first message or after 1 hour like Android
-    private func checkAndShowInterestsPopup() {
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkAndShowInterestsPopup() Checking if interests popup should be shown")
-        
-        // Don't show for AI chats
-        guard !isAIChat else {
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkAndShowInterestsPopup() Skipping for AI chat")
-            return
-        }
-        
-        // Check if this is user's first message in this chat (contextual trigger like Android)
-        let userMessageCount = messages.filter { $0.isFromCurrentUser }.count
-        guard userMessageCount == 1 else {
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkAndShowInterestsPopup() Not first message (count: \(userMessageCount))")
-            return
-        }
-        
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkAndShowInterestsPopup() Showing interests popup after first message")
-        
-        // Show interests popup (matching Android behavior)
-        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-            showInterestsPopup = true
-        }
-        
-        // Update interest time (matching Android)
-        UserSessionManager.shared.interestTime = Date().timeIntervalSince1970
-    }
+    // Removed: checkAndShowInterestsPopup (no longer showing full-screen interests popup)
     
-    /// Check time-based interests popup trigger (Android Parity)
-    /// Shows interests popup every hour like Android MessageTextActivity.onResume()
-    private func checkTimeBasedInterestsPopup() {
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkTimeBasedInterestsPopup() Checking time-based interests trigger")
-        
-        // Don't show for AI chats
-        guard !isAIChat else {
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkTimeBasedInterestsPopup() Skipping for AI chat")
-            return
-        }
-        
-        // Check if 1 hour (3600 seconds) has passed since last interest time (matching Android exactly)
-        let currentTime = Date().timeIntervalSince1970
-        let lastInterestTime = UserSessionManager.shared.interestTime
-        
-        if (lastInterestTime + 3600) < currentTime {
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkTimeBasedInterestsPopup() 1 hour passed, showing interests popup")
-            
-            // Show interests popup (matching Android behavior)
-            withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-                showInterestsPopup = true
-            }
-            
-            // Update interest time (matching Android)
-            UserSessionManager.shared.interestTime = currentTime
-        } else {
-            let timeRemaining = Int((lastInterestTime + 3600) - currentTime)
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkTimeBasedInterestsPopup() \(timeRemaining) seconds remaining until next popup")
-        }
-    }
+    // Removed: checkTimeBasedInterestsPopup (no longer showing full-screen interests popup)
     
     private func scrollToBottom(proxy: ScrollViewProxy) {
         guard !messages.isEmpty else {
@@ -2276,6 +2568,18 @@ struct MessagesView: View {
                     if change.type == .added {
                         let data = change.document.data()
                         let senderId = data["message_userId"] as? String ?? ""
+                        let messageId = change.document.documentID
+                        let isMessageSeen = data["message_seen"] as? Bool ?? false
+                        
+                        // Only promote to seen if Firestore explicitly has true; never override local seen to false
+                        if senderId == currentUserId && isMessageSeen {
+                            DispatchQueue.main.async {
+                                self.messageSeenMap[messageId] = true
+                                if let index = messages.firstIndex(where: { $0.id == messageId }) {
+                                    messages[index].isMessageSeen = true
+                                }
+                            }
+                        }
                         
                         // Android Pattern: Save all messages to local database (both current user and other users)
                         // The listener catches ALL messages, including our own sent messages
@@ -2309,12 +2613,14 @@ struct MessagesView: View {
                         let isMessageSeen = data["message_seen"] as? Bool ?? false // Android Parity: Use message_seen field
                         
                         // Update seen status for our sent messages when recipient reads them
-                        if senderId == currentUserId {
+                        if senderId == currentUserId && isMessageSeen {
                             DispatchQueue.main.async {
                                 if let index = messages.firstIndex(where: { $0.id == messageId }) {
-                                    messages[index].isMessageSeen = isMessageSeen
-                                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "setupMessageListener() Updated seen status for message \(messageId): \(isMessageSeen)")
+                                    messages[index].isMessageSeen = true
+                                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "setupMessageListener() Updated seen status for message \(messageId): true")
                                 }
+                                // Persist seen state in map to survive local DB reloads
+                                self.messageSeenMap[messageId] = true
                             }
                         }
                     }
@@ -2378,6 +2684,7 @@ struct MessagesView: View {
                 let onCall = data["on_call"] as? Bool ?? false
                 let onLive = data["on_live"] as? Bool ?? false
                 let currentChatUidForHere = data["current_chat_uid_for_here"] as? String ?? "null"
+                let hereTimestamp = (data["here_timestamp"] as? Timestamp)?.dateValue()
                 let interestTags = data["interest_tags"] as? [String] ?? []
                 let interestSentence = data["interest_sentence"] as? String ?? ""
                 
@@ -2395,24 +2702,24 @@ struct MessagesView: View {
                             // AI chat handling
                             self.handleAIStatus()
                         } else if playingGames && !self.isPremiumUser {
-                            self.updateStatus("Playing games....", color: "color_card_playing")
+                            self.updateStatus("Playing games", color: "color_card_playing")
                         } else if onLive && !self.isPremiumUser {
-                            self.updateStatus("On live....", color: "color_card_call")
+                            self.updateStatus("Live session", color: "color_card_call")
                         } else if onCall && !self.isPremiumUser {
-                            self.updateStatus("On a call....", color: "color_card_call")
+                            self.updateStatus("On a call", color: "color_card_call")
                         } else if isHere {
                             if otherUserTyping {
-                                self.updateStatus("Typing....", color: "color_card_typing")
+                                self.updateStatus("Typing…", color: "color_card_typing")
                                 self.isOtherUserTyping = true
                             } else {
-                                self.updateStatus("Here", color: "color_card_here")
+                                self.updateStatus("In chat", color: "color_card_here")
                                 self.isOtherUserTyping = false
                             }
                             // Android Parity: Mark messages as seen when user is "here" (equivalent to Android's markAsSeenAsyncTask)
                             self.markMessagesAsSeen()
                         } else {
                             if otherUserTyping && !self.isPremiumUser {
-                                self.updateStatus("Chatting with someone else....", color: "color_card_typing")
+                                self.updateStatus("Chatting with someone else", color: "color_card_typing")
                                 self.isOtherUserTyping = true
                             } else {
                                 self.updateStatus("Online", color: "color_card_online")
@@ -2422,17 +2729,17 @@ struct MessagesView: View {
                     } else {
                         // User is offline
                         if self.isAIChat {
-                            // AI offline handling would go here
+                            // AI offline handling -> always show unified Last seen format
                             if let timeString = timeString {
-                                self.updateStatus("seen: \(timeString)", color: "color_card_offline")
+                                self.updateStatus("Last seen: \(timeString) ago", color: "color_card_offline")
                             } else {
-                                self.updateStatus("now", color: "color_card_offline")
+                                self.updateStatus("Last seen: 1s ago", color: "color_card_offline")
                             }
                         } else {
                             if let timeString = timeString {
-                                self.updateStatus("seen: \(timeString)", color: "color_card_offline")
+                                self.updateStatus("Last seen: \(timeString) ago", color: "color_card_offline")
                             } else {
-                                self.updateStatus("now", color: "color_card_offline")
+                                self.updateStatus("Last seen: 1s ago", color: "color_card_offline")
                             }
                         }
                         self.isOtherUserTyping = false
@@ -2444,6 +2751,19 @@ struct MessagesView: View {
                         self.otherUserLastSeen = timestamp.dateValue()
                     }
                     self.otherUserChattingInCurrentChat = isHere
+                    
+                    // Track enter/leave moments using here_timestamp if provided
+                    if isHere {
+                        self.otherUserHereEnterTime = hereTimestamp ?? Date()
+                        // While here, mark our sent messages as seen in real time
+                        self.markSentMessagesAsSeenLocally(upTo: nil)
+                    } else {
+                        if let leaveTime = hereTimestamp ?? self.otherUserLastSeen {
+                            self.otherUserHereLeaveTime = leaveTime
+                            // On leaving, mark our sent messages up to leave time
+                            self.markSentMessagesAsSeenLocally(upTo: leaveTime)
+                        }
+                    }
                 }
             }
     }
@@ -3049,16 +3369,16 @@ struct MessagesView: View {
                 endPoint: .bottomLeading
             )
         case "connecting", "connecting...", "    ":
-            // Gray gradient for connecting/placeholder state - light from top trailing
+            // Reload/default state uses pill gray (shade2) - consistent with adjacent pills
             return LinearGradient(
-                colors: [Color("shade4").opacity(0.7), Color("shade4")],
+                colors: [Color("shade2"), Color("shade2")],
                 startPoint: .topTrailing,
                 endPoint: .bottomLeading
             )
-        case "typing":
-            // Black gradient - light from top trailing
+        case let status where status.contains("typing"):
+            // Typing uses shade_500 family
             return LinearGradient(
-                colors: [Color("shade4"), Color("black")],
+                colors: [Color("shade_500").opacity(0.85), Color("shade_500")],
                 startPoint: .topTrailing,
                 endPoint: .bottomLeading
             )
@@ -3069,24 +3389,31 @@ struct MessagesView: View {
                 startPoint: .topTrailing,
                 endPoint: .bottomLeading
             )
-        case "offline":
-            // Blue gradient - light from top trailing
+        case let status where status.contains("in chat"):
+            // Explicit mapping for "In chat" label
             return LinearGradient(
-                colors: [Color("ColorAccent").opacity(0.7), Color("ColorAccent")],
+                colors: [Color("Here").opacity(0.8), Color("Here")],
+                startPoint: .topTrailing,
+                endPoint: .bottomLeading
+            )
+        case "offline":
+            // Offline uses the same gray as interest pills
+            return LinearGradient(
+                colors: [Color("shade2"), Color("shade2")],
                 startPoint: .topTrailing,
                 endPoint: .bottomLeading
             )
         case "now":
-            // Blue gradient - light from top trailing
+            // Treat as offline pill gray (we no longer use "now" string)
             return LinearGradient(
-                colors: [Color("ColorAccent").opacity(0.7), Color("ColorAccent")],
+                colors: [Color("shade2"), Color("shade2")],
                 startPoint: .topTrailing,
                 endPoint: .bottomLeading
             )
         case let status where status.contains("seen"):
-            // Blue gradient - light from top trailing
+            // Last seen is considered an offline-like state → pill gray
             return LinearGradient(
-                colors: [Color("ColorAccent").opacity(0.7), Color("ColorAccent")],
+                colors: [Color("shade2"), Color("shade2")],
                 startPoint: .topTrailing,
                 endPoint: .bottomLeading
             )
@@ -3097,41 +3424,62 @@ struct MessagesView: View {
                 startPoint: .topTrailing,
                 endPoint: .bottomLeading
             )
+        case let status where status.contains("live"):
+            // On-live uses Plus subscription gradient
+            return LinearGradient(
+                colors: [Color("plusGradientStart"), Color("plusGradientEnd")],
+                startPoint: .topTrailing,
+                endPoint: .bottomLeading
+            )
         case let status where status.contains("call"):
-            // Pink gradient - light from top trailing
+            // On-call uses Pro subscription gradient
             return LinearGradient(
-                colors: [Color("onCall").opacity(0.8), Color("onCall")],
-                startPoint: .topTrailing,
-                endPoint: .bottomLeading
-            )
-        case let status where status.contains("voice"):
-            // Pink gradient - light from top trailing
-            return LinearGradient(
-                colors: [Color("onCall").opacity(0.8), Color("onCall")],
-                startPoint: .topTrailing,
-                endPoint: .bottomLeading
-            )
-        case let status where status.contains("video"):
-            // Pink gradient - light from top trailing
-            return LinearGradient(
-                colors: [Color("onCall").opacity(0.8), Color("onCall")],
+                colors: [Color("proGradientStart"), Color("proGradientEnd")],
                 startPoint: .topTrailing,
                 endPoint: .bottomLeading
             )
         case let status where status.contains("chatting"):
-            // Black gradient - light from top trailing
+            // Make "chatting with someone else" visually attractive
             return LinearGradient(
-                colors: [Color("shade4"), Color("black")],
+                colors: [Color("instaPink").opacity(0.9), Color("instaPink")],
                 startPoint: .topTrailing,
                 endPoint: .bottomLeading
             )
         default:
-            // Default blue gradient - light from top trailing
+            // Default to pill gray to match adjacent interest tags
             return LinearGradient(
-                colors: [Color("ColorAccent").opacity(0.7), Color("ColorAccent")],
+                colors: [Color("shade2"), Color("shade2")],
                 startPoint: .topTrailing,
                 endPoint: .bottomLeading
             )
+        }
+    }
+
+    private func getStatusTextColor() -> Color {
+        let status = currentUserStatus.lowercased()
+        switch status {
+        case "online", "here":
+            // Bright colored backgrounds → white text
+            return .white
+        case let s where s.contains("typing"):
+            return .white
+        case let s where s.contains("live"):
+            return .white
+        case let s where s.contains("call"):
+            return .white
+        case let s where s.contains("chatting"):
+            return .white
+        case "connecting", "connecting...", "    ":
+            // Gray pill
+            return Color("shade6")
+        case let s where s.contains("seen"):
+            // Last seen → gray pill background; use dark text for readability in light mode
+            return Color("shade6")
+        case "offline", "now":
+            return Color("shade6")
+        default:
+            // Default to dark-on-light for neutral/gray pills
+            return Color("shade6")
         }
     }
     
@@ -3234,25 +3582,34 @@ struct MessagesView: View {
         AppLogger.log(tag: "LOG-APP: MessagesView", message: "updateUserStatus() Updating user status display")
         
         if isAIChat {
-            currentUserStatus = aiStatus.capitalized
+            switch aiStatus.lowercased() {
+            case "typing":
+                currentUserStatus = "Typing…"
+            case "online":
+                currentUserStatus = "Online"
+            case "offline":
+                if let lastSeen = otherUserLastSeen {
+                    let timeAgo = formatLastSeenTime(lastSeen)
+                    currentUserStatus = "Last seen: \(timeAgo) ago"
+                } else {
+                    currentUserStatus = "Last seen: 1s ago"
+                }
+            default:
+                currentUserStatus = aiStatus.capitalized
+            }
         } else if isOtherUserTyping {
-            currentUserStatus = "Typing"
+            currentUserStatus = "Typing…"
         } else if otherUserIsOnline {
             currentUserStatus = "Online"
         } else {
             if let lastSeen = otherUserLastSeen {
                 let timeAgo = formatLastSeenTime(lastSeen)
-                // Android Parity: Use exact format "seen: [time]" or "now"
-                if timeAgo == "now" {
-                    currentUserStatus = "now"
-                } else {
-                    currentUserStatus = "seen: \(timeAgo)"
-                }
+                currentUserStatus = "Last seen: \(timeAgo) ago"
             } else {
                 // Only update to "now" if we have actual data, otherwise keep initial status
                 // This prevents overriding "Connecting..." with empty data during initial load
                 if !otherUserLastSeen.debugDescription.isEmpty || otherUserIsOnline {
-                    currentUserStatus = "now"
+                    currentUserStatus = "Online"
                 }
             }
         }
@@ -3264,11 +3621,9 @@ struct MessagesView: View {
         let interval = Date().timeIntervalSince(date)
         
         // Android Parity: Match TimeFormatter.getTimeAgo() format exactly
-        if interval < 5 {
-            return "now"
-        } else if interval < 60 {
+        if interval < 60 {
             let seconds = Int(interval)
-            return "\(seconds)s"
+            return seconds < 1 ? "1s" : "\(seconds)s"
         } else if interval < 3600 {
             let minutes = Int(interval / 60)
             return minutes == 1 ? "1m" : "\(minutes)m"
@@ -3800,6 +4155,107 @@ struct MarqueeText: View {
 }
 
 
+
+// MARK: - Adaptive Entry Pill (single-row when fits, two-row otherwise)
+// Removed adaptive layout for simplicity and to reduce height
+private struct EntryPillAdaptiveView: View {
+    let question: String
+    let yesTitle: String
+    let yesSystem: String
+    let noTitle: String
+    let noSystem: String
+    let gradientColors: [Color]
+    var onYes: () -> Void
+    var onNo: () -> Void
+
+    @State private var questionWidth: CGFloat = 0
+    @State private var availableWidth: CGFloat = 0
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            // Measure available width
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { availableWidth = proxy.size.width - 28 }
+                    .onChange(of: proxy.size.width) { newWidth in
+                        availableWidth = newWidth - 28
+                    }
+            }
+            .frame(height: 0)
+
+            // Invisible measurement for question text (single-line width)
+            Text(question)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundColor(.clear)
+                .lineLimit(1)
+                .background(
+                    GeometryReader { g in
+                        Color.clear
+                            .onAppear { questionWidth = g.size.width }
+                            .onChange(of: g.size.width) { newWidth in questionWidth = newWidth }
+                    }
+                )
+                .hidden()
+
+            if fitsSingleRow(availableWidth: availableWidth) {
+                HStack(spacing: 10) {
+                    Text(question)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                    pillButton(title: yesTitle, system: yesSystem, bg: Color.white.opacity(0.2), action: onYes)
+                    pillButton(title: noTitle, system: noSystem, bg: Color.white.opacity(0.15), action: onNo)
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(question)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(.white)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .multilineTextAlignment(.leading)
+                    HStack(spacing: 10) {
+                        Spacer(minLength: 0)
+                        pillButton(title: yesTitle, system: yesSystem, bg: Color.white.opacity(0.2), action: onYes)
+                        pillButton(title: noTitle, system: noSystem, bg: Color.white.opacity(0.15), action: onNo)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity)
+        .background(
+            LinearGradient(colors: gradientColors, startPoint: .topLeading, endPoint: .bottomTrailing)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func pillButton(title: String, system: String, bg: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: system)
+                    .font(.system(size: 12, weight: .bold))
+                Text(title)
+                    .font(.system(size: 12, weight: .bold))
+            }
+            .foregroundColor(.white)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(bg)
+            .clipShape(Capsule())
+        }
+    }
+
+    private func fitsSingleRow(availableWidth: CGFloat) -> Bool {
+        // Approximate: question + two buttons widths should fit available width
+        // Buttons are relatively constant width (~80 each including padding). Use 170 as heuristic.
+        let buttonsWidth: CGFloat = 170
+        guard availableWidth > 0, questionWidth > 0 else { return false }
+        return (questionWidth + buttonsWidth) <= availableWidth
+    }
+}
 
 #Preview {
     MessagesView(

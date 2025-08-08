@@ -193,6 +193,13 @@ struct RoundedCornerShape: Shape {
     }
 }
 
+// MARK: - Tail-less Bubble Shape
+struct MessageBubbleShapeNoTail: Shape {
+    func path(in rect: CGRect) -> Path {
+        RoundedRectangle(cornerRadius: 18).path(in: rect)
+    }
+}
+
 // MARK: - Modern Message Bubble View
 /**
  * Modern Message Bubble with Simplified Corner Design
@@ -237,6 +244,8 @@ struct ModernMessageBubbleView: View {
         message.logDetails(context: "BUBBLE_VIEW_INIT")
     }
     
+    // Tail removed: grouping no longer affects bubble shape
+
     private var shouldShowTimestamp: Bool {
         // Simplified timestamp logic: Show timestamp on every message
         // This ensures consistency and removes complexity from grouping
@@ -377,8 +386,7 @@ struct ModernMessageBubbleView: View {
                 }
                 .padding(.horizontal, bubbleHorizontalPadding) // Android Parity: Horizontal padding for message content
                 .padding(.vertical, 8) // Android Parity: Consistent padding for profanity messages
-                .background(bubbleColor)
-                .clipShape(RoundedRectangle(cornerRadius: 20)) // Symmetric 20 radius
+                .background(bubbleBackground)
             } else {
                 let _ = AppLogger.log(tag: "LOG-APP: MessageCells", message: "ModernMessageBubbleView.textMessageView Showing actual message text in single line layout for: \(message.id) | Text: '\(message.text.prefix(100))\(message.text.count > 100 ? "..." : "")'")
                 
@@ -407,8 +415,7 @@ struct ModernMessageBubbleView: View {
         }
         .padding(.horizontal, bubbleHorizontalPadding) // Android Parity: Horizontal padding for message content
         .padding(.vertical, 8) // Android Parity: Vertical padding for message content
-        .background(bubbleColor)
-        .clipShape(RoundedRectangle(cornerRadius: 20)) // Symmetric 20 radius
+        .background(bubbleBackground)
     }
     
     private func imageMessageView(imageUrl: String) -> some View {
@@ -434,8 +441,7 @@ struct ModernMessageBubbleView: View {
         }
         .padding(.horizontal, bubbleHorizontalPadding) // Android Parity: Consistent with text messages
         .padding(.vertical, 8) // Android Parity: Consistent with text messages
-        .background(Color("ColorAccent")) // Use accent color for all image messages
-        .clipShape(RoundedRectangle(cornerRadius: 20)) // Symmetric 20 radius
+        .background(bubbleBackground(using: Color("ColorAccent")))
     }
     
     // Android Parity: Format time with seen status (matching Android's exact format)
@@ -445,15 +451,28 @@ struct ModernMessageBubbleView: View {
         // Use TimeFormatter utility to match Android's exact timestamp format (now, 1m, 2h, 3d, etc.)
         let timeString = TimeFormatter.getTimeAgo(date)
         
-        // Android Parity: Show "time • seen" format for sent messages that are seen
+        // Show "seen • time" format for sent messages that are seen
         // Only show "seen" status for messages from current user (sent messages) that are marked as seen
         if message.isFromCurrentUser && message.isMessageSeen {
-            AppLogger.log(tag: "LOG-APP: MessageCells", message: "ModernMessageBubbleView.formatTime Showing seen status for message: \(message.id) | Final format: '\(timeString) • seen'")
-            return "\(timeString) • seen"
+            AppLogger.log(tag: "LOG-APP: MessageCells", message: "ModernMessageBubbleView.formatTime Showing seen status for message: \(message.id) | Final format: 'seen • \(timeString)'")
+            return "seen • \(timeString)"
         } else {
             AppLogger.log(tag: "LOG-APP: MessageCells", message: "ModernMessageBubbleView.formatTime No seen status for message: \(message.id) | Final format: '\(timeString)'")
             return timeString
         }
+    }
+}
+
+// MARK: - Bubble Background with Optional Tail
+extension ModernMessageBubbleView {
+    private var bubbleBackground: some View {
+        MessageBubbleShapeNoTail()
+            .fill(bubbleColor)
+    }
+
+    private func bubbleBackground(using baseColor: Color) -> some View {
+        MessageBubbleShapeNoTail()
+            .fill(baseColor)
     }
 }
 

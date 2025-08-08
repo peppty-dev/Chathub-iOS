@@ -86,6 +86,10 @@ struct EditProfileView: View {
     
     // Navigation states
     @State private var showCreateAccount: Bool = false
+
+    // Interests local state (local-first UI)
+    @State private var acceptedInterests: [String] = []
+    @State private var suggestedInterests: [String] = []
     
     var body: some View {
         VStack(spacing: 0) {
@@ -108,12 +112,6 @@ struct EditProfileView: View {
                         }
                     )
                     .padding(.horizontal, 20)
-                    
-                    // Account Creation Warning (matching Android exactly)
-                    if !isAccountCreated {
-                        AccountCreationWarningView()
-                            .padding(.horizontal, 20)
-                    }
                     
                     // Profile Details Section (conditional display based on account creation)
                     if isAccountCreated {
@@ -142,29 +140,94 @@ struct EditProfileView: View {
                         .padding(.horizontal, 20)
                     }
                     
-                    // About You Section (always visible)
+                    // About You Section (Pill-based toggles)
                     VStack(alignment: .leading, spacing: 16) {
-                        // Section Header with improved hierarchy
                         SectionHeader(
                             icon: "heart.text.square.fill",
                             title: "About You",
-                            subtitle: "Select what describes you best"
+                            subtitle: "Tap to select what describes you"
                         )
-                        
-                        // About You Items with better spacing
-                        LazyVStack(spacing: 8) {
-                            ForEach(Array(aboutYouItems.enumerated()), id: \.element.id) { index, item in
-                                AboutYouRow(
-                                    item: aboutYouItems[index],
-                                    onToggle: { isEnabled in
-                                        aboutYouItems[index].isEnabled = isEnabled
-                                    }
-                                )
+
+                        // Pills grid
+                        let pillSpacing: CGFloat = 8
+                        if #available(iOS 16.0, *) {
+                            FlowLayout(spacing: pillSpacing) {
+                                ForEach(Array(aboutYouItems.enumerated()), id: \.element.id) { index, item in
+                                    TogglePill(
+                                        title: item.title,
+                                        isSelected: aboutYouItems[index].isEnabled,
+                                        onTap: {
+                                            aboutYouItems[index].isEnabled.toggle()
+                                        }
+                                    )
+                                }
+                            }
+                        } else {
+                            // Fallback simple wrap
+                            VStack(alignment: .leading, spacing: pillSpacing) {
+                                ForEach(Array(aboutYouItems.enumerated()), id: \.element.id) { index, item in
+                                    TogglePill(
+                                        title: item.title,
+                                        isSelected: aboutYouItems[index].isEnabled,
+                                        onTap: {
+                                            aboutYouItems[index].isEnabled.toggle()
+                                        }
+                                    )
+                                }
                             }
                         }
                     }
                     .padding(.horizontal, 20)
                     .padding(.bottom, 24)
+
+                    // Live Interests Section (accepted + suggested)
+                    VStack(alignment: .leading, spacing: 16) {
+                        SectionHeader(
+                            icon: "star.circle.fill",
+                            title: "Interests",
+                            subtitle: "Accepted and suggested interests from your chats"
+                        )
+
+                        // Unified list: show both suggested and accepted; pills toggle selection but remain visible
+                        let pillSpacing: CGFloat = 8
+                        let allTags: [String] = {
+                            var list: [String] = []
+                            for t in (suggestedInterests + acceptedInterests) {
+                                if !list.contains(where: { $0.caseInsensitiveCompare(t) == .orderedSame }) {
+                                    list.append(t)
+                                }
+                            }
+                            return list
+                        }()
+                        if #available(iOS 16.0, *) {
+                            FlowLayout(spacing: pillSpacing) {
+                                ForEach(allTags, id: \.self) { tag in
+                                    let isSelected = acceptedInterests.contains { $0.caseInsensitiveCompare(tag) == .orderedSame }
+                                    TogglePill(title: tag, isSelected: isSelected) {
+                                        if isSelected { removeInterest(tag) } else { acceptInterest(tag) }
+                                    }
+                                }
+                            }
+                        } else {
+                            VStack(alignment: .leading, spacing: pillSpacing) {
+                                ForEach(allTags, id: \.self) { tag in
+                                    let isSelected = acceptedInterests.contains { $0.caseInsensitiveCompare(tag) == .orderedSame }
+                                    TogglePill(title: tag, isSelected: isSelected) {
+                                        if isSelected { removeInterest(tag) } else { acceptInterest(tag) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 24)
+
+                    // Account Creation Warning moved to bottom
+                    if !isAccountCreated {
+                        AccountCreationWarningView()
+                            .padding(.horizontal, 20)
+                            .padding(.bottom, 24)
+                    }
                 }
             }
             .background(Color("Background Color"))
@@ -241,6 +304,9 @@ struct EditProfileView: View {
         .background(Color("Background Color"))
         .onAppear {
             loadUserData()
+            // Initialize interests local state (local-first)
+            acceptedInterests = SessionManager.shared.interestTags
+            suggestedInterests = InterestSuggestionManager.shared.getSuggestedInterests()
         }
         .alert("Error", isPresented: .constant(errorMessage != nil)) {
             Button("OK") { errorMessage = nil }
@@ -632,6 +698,31 @@ struct EditProfileView: View {
             } else {
                 successMessage = "Profile updated successfully"
                 AppLogger.log(tag: "LOG-APP: EditProfileView", message: "saveProfileData() Profile saved successfully")
+            }
+        }
+    }
+
+    // MARK: - Interest actions (local-first + sync via manager)
+    private func acceptInterest(_ tag: String) {
+        // Optimistic local update
+        if !acceptedInterests.contains(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) {
+            acceptedInterests.append(tag)
+        }
+        // Keep suggestion visible; do not remove from suggestions
+        InterestSuggestionManager.shared.acceptInterest(tag, chatId: "") { success in
+            if success {
+                // Sync local mirror as well
+                self.acceptedInterests = SessionManager.shared.interestTags
+            }
+        }
+    }
+
+    private func removeInterest(_ tag: String) {
+        // Optimistic local update
+        acceptedInterests.removeAll { $0.caseInsensitiveCompare(tag) == .orderedSame }
+        InterestSuggestionManager.shared.removeInterest(tag) { success in
+            if success {
+                self.acceptedInterests = SessionManager.shared.interestTags
             }
         }
     }
@@ -1281,6 +1372,106 @@ struct ProfilePillChip: View {
         
         // Default
         return "info.circle.fill"
+    }
+}
+
+// MARK: - TogglePill (Selectable Yes/No-style pill with optional X affordance)
+struct TogglePill: View {
+    let title: String
+    var isSelected: Bool
+    var onTap: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text(title)
+                .font(.system(size: 14, weight: .semibold))
+                .lineLimit(1)
+                .foregroundColor(isSelected ? .white : Color("dark"))
+            if isSelected {
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundColor(.white.opacity(0.95))
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            Group {
+                if isSelected {
+                    LinearGradient(
+                        colors: [Color("blue_900"), Color("blue")],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                } else {
+                    Color("shade2")
+                }
+            }
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(isSelected ? Color.white.opacity(0.25) : Color("shade4"), lineWidth: 0.8)
+        )
+        .clipShape(Capsule())
+        .onTapGesture { onTap() }
+    }
+}
+
+// MARK: - Interests Flow (Accepted/Suggested tags)
+struct InterestsFlow: View {
+    enum Style { case selected, suggested }
+    let tags: [String]
+    let style: Style
+
+    var body: some View {
+        let pillSpacing: CGFloat = 8
+        if #available(iOS 16.0, *) {
+            FlowLayout(spacing: pillSpacing) {
+                ForEach(tags, id: \.self) { tag in
+                    InterestTagPill(text: tag, style: style)
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: pillSpacing) {
+                ForEach(tags, id: \.self) { tag in
+                    InterestTagPill(text: tag, style: style)
+                }
+            }
+        }
+    }
+}
+
+struct InterestTagPill: View {
+    let text: String
+    let style: InterestsFlow.Style
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(text)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(style == .selected ? .white : Color("dark"))
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            Group {
+                if style == .selected {
+                    LinearGradient(
+                        colors: [Color("blue_900"), Color("blue")],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                } else {
+                    Color("shade2")
+                }
+            }
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16)
+                .stroke(style == .selected ? Color.white.opacity(0.25) : Color("shade4"), lineWidth: 0.8)
+        )
+        .clipShape(Capsule())
     }
 }
 

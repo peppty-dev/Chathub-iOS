@@ -49,12 +49,8 @@ class OnlineStatusService {
             "is_user_online": isOnline
         ]
         
-        // Add timestamp based on status
-        if isOnline {
-            updateData["last_time_seen"] = FieldValue.serverTimestamp()
-        } else {
-            updateData["last_time_seen"] = FieldValue.serverTimestamp()
-        }
+        // Always update last_time_seen with server timestamp (entry/exit moments are captured by caller transitions)
+        updateData["last_time_seen"] = FieldValue.serverTimestamp()
         
         AppLogger.log(tag: "LOG-APP: OnlineStatusService", message: "updateUserOnlineStatus() Updating Firebase for user: \(userId)")
         

@@ -21,13 +21,15 @@ struct SettingsTabView: View {
     // Use RatingService for all rating functionality (consolidating duplicate code)
     @ObservedObject private var ratingService = RatingService.shared
     
-    // Interests dialog state (matching Android popup behavior)
-    @State private var showInterestsDialog = false
+    // Removed interests dialog state
     
     // Fix app popup state - removed since we now use NavigationManager
     
     // Debug subscription popup state (DEBUG ONLY)
     @State private var showDebugSubscriptionPopup = false
+    
+    // Navigate to My Profile view when tapping the profile header
+    @State private var navigateToMyProfile = false
     
     // App credentials (matching Android getCredentials())
     @State private var appName: String = "ChatHub"
@@ -144,11 +146,6 @@ struct SettingsTabView: View {
                 if ratingService.showRatingDialog {
                     RatingPopupView()
                 }
-                
-                // Interests Popup Overlay (matching Android popup behavior)
-                if showInterestsDialog {
-                    InterestsPopupView(isPresented: $showInterestsDialog)
-                }
             }
         )
         .overlay(
@@ -164,6 +161,15 @@ struct SettingsTabView: View {
         .sheet(isPresented: $ratingService.navigateToFeedback) {
             FeedbackView()
         }
+        .background(
+            NavigationLink(
+                destination: MyProfileView(),
+                isActive: $navigateToMyProfile
+            ) {
+                EmptyView()
+            }
+            .hidden()
+        )
     }
 
     // MARK: - Profile Header (matching Android layout exactly)
@@ -259,22 +265,17 @@ struct SettingsTabView: View {
                         .padding(1)
                 }
 
-                // Username with arrow (exactly like Android) - Perfectly centered text
-                ZStack {
-                    // Centered username text
+                // Username with arrow (minimal, tappable)
+                HStack(spacing: 6) {
+                    Spacer()
                     Text(Profanity.share.removeProfanityNumbersAllowed(UserSessionManager.shared.userName ?? "User"))
                         .font(.system(size: 20, weight: .medium))
                         .foregroundColor(Color("dark"))
-                        .frame(maxWidth: .infinity)
                         .multilineTextAlignment(.center)
-                    
-                    // Chevron positioned on the right
-                    HStack {
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .foregroundColor(Color("shade_400"))
-                            .font(.system(size: 18))
-                    }
+                    Image(systemName: "chevron.right")
+                        .foregroundColor(Color("dark"))
+                        .font(.system(size: 16, weight: .semibold))
+                    Spacer()
                 }
                 .padding(.bottom, 15)
             }
@@ -284,6 +285,7 @@ struct SettingsTabView: View {
             .onTapGesture {
                 // Navigate to profile view (MyProfileActivity equivalent)
                 AppLogger.log(tag: "LOG-APP: SettingsTabView", message: "profileHeaderTapped() navigating to profile")
+                navigateToMyProfile = true
             }
         }
     }
@@ -420,9 +422,9 @@ struct SettingsTabView: View {
 
         switch row.title {
         case "Update interests":
-            showInterestsDialog = true
-            UserSessionManager.shared.interestTime = Date().timeIntervalSince1970
-            AppLogger.log(tag: "LOG-APP: SettingsTabView", message: "updateInterestsTapped() showing interests dialog")
+            // Navigate user to Edit Profile interests section instead
+            navigateToMyProfile = true
+            AppLogger.log(tag: "LOG-APP: SettingsTabView", message: "updateInterestsTapped() navigating to MyProfileView")
         case "Share the app":
             shareApp()
         case "Rate the app":
