@@ -107,4 +107,107 @@ extension UserCoreDataReplacement {
         return ""
     }
     var profilePictureURL: String? { return image }
+    
+    // MARK: - Extended Profile Properties for Android Parity
+    
+    /// Profile properties that match Android Profile_Table structure
+    var city: String? { 
+        // For now, return nil as city is not stored in current schema
+        return nil
+    }
+    
+    var height: String? {
+        // For now, return nil as height is not stored in current schema  
+        return nil
+    }
+    
+    var hobbies: String? {
+        // For now, return nil as hobbies are not stored in current schema
+        return nil
+    }
+    
+    var zodiac: String? {
+        // For now, return nil as zodiac is not stored in current schema
+        return nil
+    }
+    
+    var snapchat: String? {
+        // For now, return nil as snapchat is not stored in current schema
+        return nil
+    }
+    
+    var instagram: String? {
+        // For now, return nil as instagram is not stored in current schema
+        return nil
+    }
+    
+    var smokes: String? {
+        // For now, return nil as smoking preference is not stored in current schema
+        return nil
+    }
+    
+    var drinks: String? {
+        // For now, return nil as drinking preference is not stored in current schema
+        return nil
+    }
+    
+    var gym: String? {
+        // For now, return nil as gym preference is not stored in current schema
+        return nil
+    }
+    
+    var single: String? {
+        // For now, return nil as relationship status is not stored in current schema
+        return nil
+    }
+    
+    var married: String? {
+        // For now, return nil as marriage status is not stored in current schema
+        return nil
+    }
+    
+    var children: String? {
+        // For now, return nil as children status is not stored in current schema
+        return nil
+    }
+    
+    var music: String? {
+        // For now, return nil as music preference is not stored in current schema
+        return nil
+    }
+    
+    var movies: String? {
+        // For now, return nil as movies preference is not stored in current schema
+        return nil
+    }
+    
+    var travel: String? {
+        // For now, return nil as travel preference is not stored in current schema
+        return nil
+    }
+    
+    var games: String? {
+        // For now, return nil as games preference is not stored in current schema
+        return nil
+    }
+    
+    var voiceAllowed: String? {
+        // For now, return nil as voice preference is not stored in current schema
+        return nil
+    }
+    
+    var videoAllowed: String? {
+        // For now, return nil as video preference is not stored in current schema
+        return nil
+    }
+    
+    var likesMen: String? {
+        // For now, return nil as gender preference is not stored in current schema
+        return nil
+    }
+    
+    var likesWomen: String? {
+        // For now, return nil as gender preference is not stored in current schema
+        return nil
+    }
 } 

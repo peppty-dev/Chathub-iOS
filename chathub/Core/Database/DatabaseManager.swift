@@ -929,10 +929,7 @@ class DatabaseManager {
         AppLogger.log(tag: "LOG-APP: DatabaseManager", message: "initializeDatabaseClasses() - AITrainingMessagesDB singleton ready")
         
         // 4. NotificationDB (converted to singleton)
-        // Access the singleton and ensure table is created
-        if let notificationDB = getNotificationDBInternal() {
-            notificationDB.ensureTableCreated()
-        }
+        InAppNotificationDB.shared.ensureTableCreated()
         AppLogger.log(tag: "LOG-APP: DatabaseManager", message: "initializeDatabaseClasses() - NotificationDB singleton ready")
         
         // 5. ProfileDB (singleton) - ensure table is created

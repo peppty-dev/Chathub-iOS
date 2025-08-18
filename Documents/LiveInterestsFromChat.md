@@ -96,16 +96,22 @@ All platforms follow the same high-level pipeline and scoring. Platform-specific
 - UI: Reuse presentation patterns from `InterestsDialogView` / `InterestsPopupView` for confirmation affordances; add a lightweight pill strip above the composer.
 
 
-## UX Spec
+## UX Spec - Unified Periodic System
 
-- **Surface**: At most 1 pill above the input, for ~8 seconds; subtle animation in/out.
+- **Display**: Single pill above the input with spring animation in/out
+- **Timing**: 
+  - Immediate display on chat entry
+  - Periodic reappearance every 5-20 seconds (adaptive delay)
+  - Session limit: 15 pills maximum per chat session
 - **Actions**:
-  - Like: add to `interest_tags` (if not present), show small toast “Added to interests”.
-  - Dislike: suppress candidate (cooldown), lower score.
-  - Dismiss (X): same as dislike but softer penalty.
-- **Rate limits**: max 1 pill per 2 sent messages; max 3 per session hour.
-- **Quality**: prefer multiword phrases (e.g., “digital painting”, “keto recipes”).
-- **Accessibility**: VoiceOver labels for pill and actions; large tap targets.
+  - **Yes**: Accept interest (add to `interest_tags`) or confirm about-you detail; show toast "Added to interests"
+  - **No**: Reject/dismiss suggestion; hide pill and schedule next
+- **Content**: Alternates between interest suggestions and about-you questions using existing A/B logic
+- **Smart Features**:
+  - Adaptive delays increase after each interaction (5s → 20s max)
+  - Context-aware: same quality filtering and rotation as before
+  - Unified state management eliminates conflicts between entry/inline pills
+- **Accessibility**: VoiceOver labels for pill and actions; large tap targets
 
 
 ## Privacy, Consent, and Safety
@@ -234,13 +240,13 @@ function extractCandidates(text) {
 
 ## Current iOS Implementation (Files, APIs, Behavior)
 
-This section documents the concrete implementation currently in the iOS app.
+This section documents the unified periodic information gathering system in the iOS app.
 
-- Files
-  - `chathub/Core/Services/Interests/InterestExtractionService.swift`
-  - `chathub/Core/Services/Interests/InterestSuggestionManager.swift`
-  - `chathub/Views/Chat/InterestSuggestionPill.swift`
-  - `chathub/Views/Chat/MessagesView.swift` (edits)
+- **Files**
+  - `chathub/Core/Services/Interests/InterestExtractionService.swift` - On-device text analysis and scoring
+  - `chathub/Core/Services/Interests/InterestSuggestionManager.swift` - Interest suggestion management
+  - `chathub/Views/Chat/InfoGatherPill.swift` - Unified pill component for all info gathering
+  - `chathub/Views/Chat/MessagesView.swift` - Unified periodic system implementation
 
 ### InterestExtractionService (Core Logic)
 
@@ -259,21 +265,29 @@ This section documents the concrete implementation currently in the iOS app.
 
 ### InterestSuggestionManager (Persistence Bridge)
 
-- `processOutgoingMessage(chatId:message:) -> String?` wraps extractor with `SessionManager.shared.interestTags`.
-- `acceptInterest(_:chatId:completion:)` merges to Firestore (`interest_tags`) and updates session; calls `markAccepted`.
-- `rejectInterest(_:chatId:)` calls `markDisliked` (no persistence).
+- Provides interest suggestions via `getSuggestedInterests()` for the periodic pill system
+- `acceptInterest(_:chatId:completion:)` merges to Firestore (`interest_tags`) and updates session
+- `rejectInterest(_:chatId:)` handles rejection cooldowns without persistence
+- No longer processes outgoing messages for immediate suggestions (replaced by periodic system)
 
-### Pill UI (InterestSuggestionPill)
+### Pill UI (InfoGatherPill)
 
 - Capsule gradient pill with text and actions (X and thumbs-up), spring animated.
-- Reusable as `InterestSuggestionPill(text:onAccept:onReject:)`.
+- Reusable as `InfoGatherPill(title:text:onYes:onNo:)`.
 
-### Chat Integration (MessagesView.swift)
+### Chat Integration (MessagesView.swift) - Unified Periodic System
 
-- State: `@State private var pendingInterestSuggestion: String?`
-- UI: Pill appears above the composer in `messageInputView` when non-nil; auto-hides after ~10s.
-- Trigger: In `handleSendMessage()`, after limit checks pass and before sending, we call `computeInterestSuggestionIfAny(sentText:)` so the current text is analyzed before being cleared.
-- Accept/Reject handlers save or cooldown and then hide the pill, with toasts on result.
+- **Unified State**: `@State private var currentInfoGatherContent: InfoGatherContent?` with timer scheduling
+- **UI**: Single `InfoGatherPill` appears periodically above the composer, alternating between interests and about-you questions
+- **Trigger Logic**: 
+  - Shows immediately on chat entry
+  - Reappears every 5+ seconds after user interaction (adaptive delay)
+  - Session limit of 15 pills maximum to prevent fatigue
+- **User Interaction**: Any Yes/No response hides current pill and schedules next one after delay
+- **Smart Features**: 
+  - Adaptive delays (5s → 20s max) based on user engagement
+  - Same alternating A/B logic for content selection
+  - Proper cleanup on view dismissal
 
 ### Storage and Sync
 

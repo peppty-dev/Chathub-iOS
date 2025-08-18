@@ -42,13 +42,33 @@ struct MessagesView: View {
     @State private var fullScreenImageURL: String = ""
     @State private var showToast: Bool = false
     @State private var toastMessage: String = ""
-    // Entry Pill (Always-on-entry alternating prompt)
-    private enum EntryPillContent {
+    // Unified Info Gathering System (Periodic pill display)
+    private enum InfoGatherContent {
         case interest(phrase: String)
         case aboutYou(key: String, question: String)
+        
+        var title: String {
+            switch self {
+            case .interest: return "Are you interested in"
+            case .aboutYou: return "Tell us more about you"
+            }
+        }
+        
+        var text: String {
+            switch self {
+            case .interest(let phrase): return phrase.interestDisplayFormatted
+            case .aboutYou(_, let question): return question
+            }
+        }
     }
-    @State private var entryPill: EntryPillContent? = nil
+    @State private var currentInfoGatherContent: InfoGatherContent? = nil
+    @State private var infoGatherTimer: Timer? = nil
     @State private var aboutYouValues: [String: String] = [:]
+    @State private var infoGatherDelay: TimeInterval = 5.0 // Adaptive delay
+    @State private var pillsShownThisSession: Int = 0
+    private let maxPillsPerSession: Int = 15
+    @State private var interestRejectionCounts: [String: Int] = [:]
+    private let maxInterestRejections: Int = 2
 
     
     // MARK: - Call Implementation (Android Parity)
@@ -316,33 +336,21 @@ struct MessagesView: View {
     
     private var messageInputView: some View {
         VStack(spacing: 0) {
-            // Always-on-entry pill shown above status/tags
-            if let pill = entryPillView {
-                pill
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 8)
-                    .transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity),
-                                            removal: .move(edge: .bottom).combined(with: .opacity)))
-            }
-
-            statusAndInterestsView
-
-            // Inline suggestion pill above composer (still supported after send)
-            if entryPill == nil, let pill = pendingInterestSuggestion {
-                HStack {
-                    InterestSuggestionPill(text: pill) {
-                        acceptInterestSuggestion(pill)
-                    } onReject: {
-                        rejectInterestSuggestion(pill)
-                    }
-                    Spacer(minLength: 0)
-                }
+            // Unified periodic info gathering pill
+            if let content = currentInfoGatherContent {
+                InfoGatherPill(
+                    title: content.title,
+                    text: content.text,
+                    onYes: { handleInfoGatherResponse(content: content, accepted: true) },
+                    onNo: { handleInfoGatherResponse(content: content, accepted: false) }
+                )
                 .padding(.horizontal, 10)
-                .padding(.top, 6)
+                .padding(.vertical, 8)
                 .transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity),
                                         removal: .move(edge: .bottom).combined(with: .opacity)))
             }
 
+            statusAndInterestsView
             inputBarView
         }
     }
@@ -521,7 +529,8 @@ struct MessagesView: View {
                             Text("Message...")
                                 .font(.system(size: 16, weight: .regular))
                                 .foregroundColor(Color("shade6"))
-                                .padding(.leading, 12)
+                                .padding(.leading, 16) // Increased padding to account for TextEditor's internal padding
+                                .padding(.vertical, 2) // Match TextEditor vertical padding
                         }
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
                         .allowsHitTesting(false)
@@ -795,10 +804,13 @@ struct MessagesView: View {
                 }
                 .buttonStyle(PlainButtonStyle())
 
-                // Chats badge immediately next to chevron (no gap)
+                // Chats badge immediately next to chevron (no gap) - also clickable for better UX
                 if badgeManager.chatsBadgeCount > 0 {
-                    BadgeView(count: badgeManager.chatsBadgeCount)
-                        .padding(.leading, 0)
+                    Button(action: { presentationMode.wrappedValue.dismiss() }) {
+                        BadgeView(count: badgeManager.chatsBadgeCount)
+                            .padding(.leading, 0)
+                    }
+                    .buttonStyle(PlainButtonStyle())
                 }
 
                 // Username with larger gap from badge
@@ -806,10 +818,21 @@ struct MessagesView: View {
                     AppLogger.log(tag: "LOG-APP: MessagesView", message: "username tapped - navigating to profile for user: \(otherUser.name)")
                     showUserProfile = true
                 }) {
-                    Text(isAIChat ? "\(otherUser.name)." : otherUser.name)
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(Color("dark"))
-                        .padding(.leading, 12) // larger spacing between badge and username
+                    HStack(spacing: 4) {
+                        Text(isAIChat ? "\(otherUser.name)." : otherUser.name)
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(Color("dark"))
+                        
+                        // DEBUG ONLY: AI indicator dot
+                        #if DEBUG
+                        if isAIChat {
+                            Circle()
+                                .fill(Color.red)
+                                .frame(width: 6, height: 6)
+                        }
+                        #endif
+                    }
+                    .padding(.leading, 12) // larger spacing between badge and username
                 }
                 .buttonStyle(PlainButtonStyle())
             }
@@ -1018,32 +1041,169 @@ struct MessagesView: View {
             }
         }
 
-        // Prepare entry pill content (alternates between Category A and B)
-        loadAboutYouCacheAndPrepareEntryPill()
+        // Start unified info gathering system with integrated interest suggestions
+        startInfoGatheringSystem()
 
         // Update "here" status so other devices can detect we're in this chat (Android parity)
         updateHereStatus(isActive: true)
     }
 
-    private func loadAboutYouCacheAndPrepareEntryPill() {
-        let uid = UserSessionManager.shared.userId ?? ""
-        guard !uid.isEmpty else { prepareEntryPill(); return }
-        Firestore.firestore().collection("Users").document(uid).getDocument { doc, _ in
-            var values: [String: String] = [:]
-            if let data = doc?.data() {
-                let keys = [
-                    "married", "children", "smokes", "drinks",
-                    "voice_allowed", "video_allowed", "pics_allowed"
-                ]
-                for k in keys {
-                    if let v = data[k] as? String { values[k] = v }
-                }
-            }
-            self.aboutYouValues = values
-            self.prepareEntryPill()
-            // If we showed something previously and the user ignored it, rotate to next on re-entry
-            if self.entryPill == nil { self.prepareEntryPill() }
+    // MARK: - Unified Info Gathering System
+    
+    private func startInfoGatheringSystem() {
+        // Load rejection counts from UserDefaults
+        loadInterestRejectionCounts()
+        
+        // Load AboutYou answers from local storage only (no Firestore read)
+        loadAboutYouValuesFromLocal()
+        
+        // Cleanup old presented questions tracking data (housekeeping)
+        cleanupOldPresentedQuestions()
+        
+        // DEBUG: Test if system can handle interest suggestions - add a test suggestion
+        // Remove this after confirming the system works
+        let debugState = SimplifiedInterestManager.shared.debugCurrentState()
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "startInfoGatheringSystem() Initial state: \(debugState)")
+        
+        // Show first pill immediately - no network dependency
+        showNextInfoGatherPill()
+        
+        // Optional: Sync Firestore data to local storage in background (for migration)
+        syncFirestoreToLocalInBackground()
+    }
+    
+    private func showNextInfoGatherPill() {
+        // Check session limits
+        guard pillsShownThisSession < maxPillsPerSession else {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "showNextInfoGatherPill() Session limit reached (\(maxPillsPerSession))")
+            return
         }
+        
+        // Get next content using the same alternating logic
+        guard let content = getNextInfoGatherContent() else {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "showNextInfoGatherPill() No content available - scheduling retry")
+            // CRITICAL FIX: Always schedule next check even when no content available
+            // This ensures the system keeps checking for new suggestions as they become available
+            scheduleNextInfoGatherPill(delay: infoGatherDelay)
+            return
+        }
+        
+        // Show the pill with animation
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+            currentInfoGatherContent = content
+        }
+        
+        pillsShownThisSession += 1
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "showNextInfoGatherPill() Showed pill \(pillsShownThisSession)/\(maxPillsPerSession)")
+    }
+    
+    private func handleInfoGatherResponse(content: InfoGatherContent, accepted: Bool) {
+        // Process the response based on content type
+        switch content {
+        case .interest(let phrase):
+            if accepted {
+                acceptInterestSuggestion(phrase)
+            } else {
+                rejectInterestSuggestion(phrase)
+            }
+            
+        case .aboutYou(let key, _):
+            saveAboutYouAnswer(key: key, yes: accepted)
+        }
+        
+        // Hide current pill with animation
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+            currentInfoGatherContent = nil
+        }
+        
+        // Increase delay slightly after each interaction to be less aggressive
+        infoGatherDelay = min(infoGatherDelay * 1.2, 20.0) // Cap at 20 seconds
+        
+        // Schedule next pill after delay
+        scheduleNextInfoGatherPill(delay: infoGatherDelay)
+    }
+    
+    private func scheduleNextInfoGatherPill(delay: TimeInterval) {
+        // Invalidate existing timer
+        infoGatherTimer?.invalidate()
+        
+        // Schedule new timer
+        infoGatherTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
+            DispatchQueue.main.async {
+                self.showNextInfoGatherPill()
+            }
+        }
+        
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "scheduleNextInfoGatherPill() Next pill in \(delay) seconds")
+    }
+    
+    /// CRITICAL FIX: Trigger immediate pill check when new content becomes available
+    /// This prevents the dead state where system waits indefinitely when both lists were initially empty
+    private func triggerImmediatePillCheckIfNeeded() {
+        // Only trigger if no pill is currently showing and we're within session limits
+        guard currentInfoGatherContent == nil && pillsShownThisSession < maxPillsPerSession else {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "triggerImmediatePillCheckIfNeeded() Skipping - pill showing or session limit reached")
+            return
+        }
+        
+        // Check if we now have content available (when we previously didn't)
+        let availableInterest = nextInterestSuggestionForEntry()
+        let availableAboutYou = nextAboutYouQuestionForEntry()
+        
+        if availableInterest != nil || availableAboutYou != nil {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "triggerImmediatePillCheckIfNeeded() New content available - triggering immediate check")
+            // Cancel existing timer and show immediately
+            infoGatherTimer?.invalidate()
+            // Small delay to let the UI settle after message send
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                self.showNextInfoGatherPill()
+            }
+        } else {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "triggerImmediatePillCheckIfNeeded() No new content available yet")
+        }
+    }
+    
+    private func getNextInfoGatherContent() -> InfoGatherContent? {
+        // Use resilient alternating logic that prioritizes showing any available content
+        let defaults = UserDefaults.standard
+        let lastCategoryA = defaults.bool(forKey: "entry_pill_last_was_A")
+        
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "getNextInfoGatherContent() lastCategoryA: \(lastCategoryA)")
+        
+        // Check what's available before attempting
+        let availableInterest = nextInterestSuggestionForEntry()
+        let availableAboutYou = nextAboutYouQuestionForEntry()
+        
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "getNextInfoGatherContent() Available - Interest: \(availableInterest ?? "none"), AboutYou: \(availableAboutYou?.question ?? "none")")
+        
+        // RESILIENT LOGIC: Always show something if available, prefer alternating when both exist
+        if availableInterest != nil && availableAboutYou != nil {
+            // Both available - use alternating logic
+            if !lastCategoryA {
+                // Prefer interest suggestions first
+                defaults.set(true, forKey: "entry_pill_last_was_A")
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "getNextInfoGatherContent() Alternating - Showing INTEREST: \(availableInterest!)")
+                return .interest(phrase: availableInterest!)
+            } else {
+                // Prefer AboutYou questions first
+                defaults.set(false, forKey: "entry_pill_last_was_A")
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "getNextInfoGatherContent() Alternating - Showing ABOUTYOU: \(availableAboutYou!.question)")
+                return .aboutYou(key: availableAboutYou!.key, question: availableAboutYou!.question)
+            }
+        } else if let phrase = availableInterest {
+            // Only interests available - keep showing them
+            defaults.set(true, forKey: "entry_pill_last_was_A")
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "getNextInfoGatherContent() Interest-only mode - Showing INTEREST: \(phrase)")
+            return .interest(phrase: phrase)
+        } else if let aboutYou = availableAboutYou {
+            // Only AboutYou available - keep showing them
+            defaults.set(false, forKey: "entry_pill_last_was_A")
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "getNextInfoGatherContent() AboutYou-only mode - Showing ABOUTYOU: \(aboutYou.question)")
+            return .aboutYou(key: aboutYou.key, question: aboutYou.question)
+        }
+        
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "getNextInfoGatherContent() No content available")
+        return nil
     }
     
     private func handleViewDisappear() {
@@ -1204,6 +1364,8 @@ struct MessagesView: View {
             return AVCaptureDevice.authorizationStatus(for: .video) == .authorized
         case .microphoneAndCamera:
             return hasPermission(for: .microphone) && hasPermission(for: .camera)
+        case .liveFeature:
+            return hasPermission(for: .microphone) && hasPermission(for: .camera)
         }
     }
     
@@ -1239,6 +1401,18 @@ struct MessagesView: View {
                     }
                 }
             }
+        case .liveFeature:
+            AVAudioSession.sharedInstance().requestRecordPermission { audioGranted in
+                if audioGranted {
+                    AVCaptureDevice.requestAccess(for: .video) { videoGranted in
+                        if videoGranted {
+                            DispatchQueue.main.async {
+                                self.handleLiveButtonTap()
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     
@@ -1250,6 +1424,8 @@ struct MessagesView: View {
             return "Camera permission is required to start a video call"
         case .microphoneAndCamera:
             return "Camera and microphone permissions are required to start a video call"
+        case .liveFeature:
+            return "Camera and microphone permissions are required to use the live feature"
         }
     }
     
@@ -1330,6 +1506,10 @@ struct MessagesView: View {
         if isLiveOn {
             stopLive()
         }
+        
+        // Clean up info gathering timer
+        infoGatherTimer?.invalidate()
+        infoGatherTimer = nil
         
         // Cleanup LiveManager
         liveManager.cleanup()
@@ -1780,8 +1960,7 @@ struct MessagesView: View {
             MessageLimitManager.shared.performMessageSend { success in
                 if success {
                     AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleSendMessage() Message limit check passed, proceeding with send")
-                    // Precompute interest suggestion before messageText cleared
-                    computeInterestSuggestionIfAny(sentText: text)
+
                     sendMessage()
                 } else {
                     AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleSendMessage() Message send blocked by limit manager")
@@ -1796,117 +1975,87 @@ struct MessagesView: View {
         }
     }
 
-    // MARK: - Interest Suggestion Integration
-    @State private var pendingInterestSuggestion: String? = nil
-    private func computeInterestSuggestionIfAny(sentText: String) {
-        let suggestion = InterestSuggestionManager.shared.processOutgoingMessage(chatId: chatId, message: sentText)
-        DispatchQueue.main.async {
-            withAnimation { self.pendingInterestSuggestion = suggestion }
-            if suggestion != nil {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
-                    withAnimation { if self.pendingInterestSuggestion == suggestion { self.pendingInterestSuggestion = nil } }
-                }
-            }
-        }
-    }
 
+
+    // MARK: - Simplified Interest System
+    
+    // NOTE: showInterestSuggestionPill() removed - interests now use InfoGatherPill timing system
+    
+    /// Handle user accepting an interest suggestion (simplified)
     private func acceptInterestSuggestion(_ phrase: String) {
-        // Optimistically hide immediately (ask one at a time UX)
-        withAnimation {
-            if case .interest(let p)? = self.entryPill, p.caseInsensitiveCompare(phrase) == .orderedSame {
-                self.entryPill = nil
-            }
-            self.pendingInterestSuggestion = nil
-        }
-        InterestSuggestionManager.shared.acceptInterest(phrase, chatId: chatId) { _ in }
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "acceptInterestSuggestion() '\(phrase)' accepted")
+        
+        // Add to interests list
+        SimplifiedInterestManager.shared.addInterest(phrase)
+        
+        // Remove from pending queue
+        SimplifiedInterestManager.shared.removePendingSuggestion(phrase)
+        
+        // Show success feedback
+        // TODO: Add toast notification "Added to interests"
     }
 
+    /// Handle user rejecting an interest suggestion (simplified)
     private func rejectInterestSuggestion(_ phrase: String) {
-        // Optimistically hide immediately
-        withAnimation {
-            self.pendingInterestSuggestion = nil
-            if case .interest(let p)? = self.entryPill, p.caseInsensitiveCompare(phrase) == .orderedSame {
-                self.entryPill = nil
-            }
-        }
-        InterestSuggestionManager.shared.rejectInterest(phrase, chatId: chatId)
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "rejectInterestSuggestion() '\(phrase)' rejected")
+        
+        // Remove from pending queue (discarded)
+        SimplifiedInterestManager.shared.removePendingSuggestion(phrase)
+        
+        // Use simplified manager (no-op - just discard)
+        SimplifiedInterestManager.shared.rejectInterest(phrase)
     }
 
-    // MARK: - Entry Pill Logic (Alternating A/B)
 
-    private func prepareEntryPill() {
-        // Decide alternation based on a simple toggle persisted in UserDefaults
-        let defaults = UserDefaults.standard
-        let lastCategoryA = defaults.bool(forKey: "entry_pill_last_was_A")
-
-        // Attempt preferred category first, then fallback to the other
-        if !lastCategoryA {
-            if let a = nextInterestSuggestionForEntry() {
-                entryPill = .interest(phrase: a)
-                defaults.set(true, forKey: "entry_pill_last_was_A")
-                return
-            } else if let b = nextAboutYouQuestionForEntry() {
-                entryPill = .aboutYou(key: b.key, question: b.question)
-                defaults.set(false, forKey: "entry_pill_last_was_A")
-                return
-            }
-        } else {
-            if let b = nextAboutYouQuestionForEntry() {
-                entryPill = .aboutYou(key: b.key, question: b.question)
-                defaults.set(false, forKey: "entry_pill_last_was_A")
-                return
-            } else if let a = nextInterestSuggestionForEntry() {
-                entryPill = .interest(phrase: a)
-                defaults.set(true, forKey: "entry_pill_last_was_A")
-                return
-            }
-        }
-
-        // If nothing to ask, hide
-        entryPill = nil
-    }
 
     private func nextInterestSuggestionForEntry() -> String? {
-        // Persisted rotation across visits using an index in UserDefaults
-        let suggestions = InterestSuggestionManager.shared.getSuggestedInterests()
-        guard !suggestions.isEmpty else { return nil }
-
-        let defaults = UserDefaults.standard
-        let indexKey = "entry_pill_interest_index"
-        var startIndex = defaults.integer(forKey: indexKey)
-        if startIndex < 0 || startIndex >= suggestions.count { startIndex = 0 }
-
-        let accepted = Set(SessionManager.shared.interestTags.map { $0.lowercased() })
-
-        var foundIndex: Int? = nil
-        for offset in 0..<suggestions.count {
-            let idx = (startIndex + offset) % suggestions.count
-            let phrase = suggestions[idx]
-            if !accepted.contains(phrase.lowercased()) {
-                foundIndex = idx
-                break
-            }
-        }
-
-        if let idx = foundIndex {
-            // Advance pointer to the next item for future entries
-            defaults.set((idx + 1) % suggestions.count, forKey: indexKey)
-            return suggestions[idx]
-        } else {
-            // Nothing usable (all accepted). Still advance pointer to keep rotation moving.
-            defaults.set((startIndex + 1) % suggestions.count, forKey: indexKey)
-            return nil
-        }
+        // Get next pending suggestion from SimplifiedInterestManager queue
+        let suggestion = SimplifiedInterestManager.shared.getNextPendingSuggestion()
+        
+        // Debug current state
+        let debugState = SimplifiedInterestManager.shared.debugCurrentState()
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "nextInterestSuggestionForEntry() \(debugState)")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "nextInterestSuggestionForEntry() Returning: \(suggestion ?? "nil")")
+        
+        return suggestion
     }
 
     private func nextAboutYouQuestionForEntry() -> (key: String, question: String)? {
-        // Consider a subset of yes/no style profile fields from EditProfile
+        // Complete set of yes/no style profile fields from EditProfile
         // Map Firestore key -> human-readable question
         let candidates: [(String, String)] = [
+            // Relationship & Personal Status
+            ("like_men", "Do you like men?"),
+            ("like_woman", "Do you like women?"),
+            ("single", "Are you single?"),
             ("married", "Are you married?"),
             ("children", "Do you have children?"),
+            
+            // Lifestyle & Activities
+            ("gym", "Do you go to the gym?"),
             ("smokes", "Do you smoke?"),
             ("drinks", "Do you drink?"),
+            ("games", "Do you play video games?"),
+            ("decent_chat", "Do you prefer decent conversation?"),
+            
+            // Interests & Hobbies
+            ("pets", "Do you love pets?"),
+            ("travel", "Do you love to travel?"),
+            ("music", "Do you love music?"),
+            ("movies", "Do you love movies?"),
+            ("naughty", "Are you naughty?"),
+            ("foodie", "Are you a foodie?"),
+            ("dates", "Do you go on dates?"),
+            ("fashion", "Do you love fashion?"),
+            
+            // Emotional State
+            ("broken", "Are you feeling broken or hurt?"),
+            ("depressed", "Are you feeling depressed?"),
+            ("lonely", "Are you feeling lonely?"),
+            ("cheated", "Have you been cheated on?"),
+            ("insomnia", "Do you have trouble sleeping?"),
+            
+            // Communication Preferences
             ("voice_allowed", "Do you allow voice calls?"),
             ("video_allowed", "Do you allow video calls?"),
             ("pics_allowed", "Do you send pictures?")
@@ -1917,136 +2066,240 @@ struct MessagesView: View {
         var startIndex = defaults.integer(forKey: indexKey)
         if startIndex < 0 || startIndex >= candidates.count { startIndex = 0 }
 
-        // Treat empty/null as unanswered
+        // Load presented questions tracking
+        let presentedQuestions = loadPresentedAboutYouQuestions()
+        
+        // Find questions that haven't been answered AND haven't been presented recently
         for offset in 0..<candidates.count {
             let idx = (startIndex + offset) % candidates.count
             let (key, question) = candidates[idx]
             let current = aboutYouValues[key] ?? ""
-            if current.isEmpty || current == "null" {
-                // Advance pointer to the next item for future entries
-                defaults.set((idx + 1) % candidates.count, forKey: indexKey)
-                return (key, question)
+            
+            // Skip if already answered
+            if !current.isEmpty && current != "null" {
+                continue
             }
+            
+            // Skip if already presented recently (within last 30 days)
+            if let lastPresented = presentedQuestions[key] {
+                let daysSincePresented = Date().timeIntervalSince(lastPresented) / (24 * 60 * 60)
+                if daysSincePresented < 30 {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "nextAboutYouQuestionForEntry() Skipping '\(key)' - presented \(Int(daysSincePresented)) days ago")
+                    continue
+                }
+            }
+            
+            // This question is eligible - mark as presented and return it
+            markAboutYouQuestionAsPresented(key: key)
+            
+            // Advance pointer to the next item for future entries
+            defaults.set((idx + 1) % candidates.count, forKey: indexKey)
+            
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "nextAboutYouQuestionForEntry() Selected question: '\(key)' - '\(question)'")
+            return (key, question)
         }
 
-        // All answered — still advance pointer to keep rotation moving
+        // All questions either answered or recently presented — still advance pointer
         defaults.set((startIndex + 1) % max(candidates.count, 1), forKey: indexKey)
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "nextAboutYouQuestionForEntry() No eligible questions found")
         return nil
     }
 
-    // MARK: - Entry Pill View
-    private var entryPillView: AnyView? {
-        guard let entryPill else { return nil }
-        switch entryPill {
-        case .interest(let phrase):
-            return AnyView(
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Are you interested in")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundColor(.white.opacity(0.95))
-                    Text(phrase.interestDisplayFormatted)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    HStack(spacing: 10) {
-                        Spacer(minLength: 0)
-                        pillChoiceButton(title: "Yes", system: "heart.fill", bg: Color.white.opacity(0.2)) {
-                            acceptInterestSuggestion(phrase)
-                        }
-                        pillChoiceButton(title: "No", system: "xmark", bg: Color.white.opacity(0.15)) {
-                            rejectInterestSuggestion(phrase)
-                        }
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity)
-                .background(
-                    LinearGradient(
-                        colors: [Color("liteGradientStart"), Color("liteGradientEnd")],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            )
-        case .aboutYou(let key, let question):
-            return AnyView(
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Tell us more about you")
-                        .font(.system(size: 13, weight: .bold))
-                        .foregroundColor(.white.opacity(0.95))
-                    Text(question)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                        .truncationMode(.tail)
-                    HStack(spacing: 10) {
-                        Spacer(minLength: 0)
-                        pillChoiceButton(title: "Yes", system: "heart.fill", bg: Color.white.opacity(0.2)) {
-                            saveAboutYouAnswer(key: key, yes: true)
-                            withAnimation { self.entryPill = nil }
-                        }
-                        pillChoiceButton(title: "No", system: "xmark", bg: Color.white.opacity(0.15)) {
-                            saveAboutYouAnswer(key: key, yes: false)
-                            withAnimation { self.entryPill = nil }
-                        }
-                    }
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity)
-                .background(
-                    LinearGradient(
-                        colors: [Color("liteGradientStart"), Color("liteGradientEnd")],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-            )
+
+
+
+
+    // MARK: - Interest Rejection Tracking Persistence
+    
+    private func loadInterestRejectionCounts() {
+        let defaults = UserDefaults.standard
+        if let data = defaults.data(forKey: "interest_rejection_counts"),
+           let counts = try? JSONDecoder().decode([String: Int].self, from: data) {
+            interestRejectionCounts = counts
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "loadInterestRejectionCounts() Loaded \(counts.count) rejection counts")
+        } else {
+            interestRejectionCounts = [:]
         }
     }
-
-    private func pillCircleButton(system: String, bg: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: system)
-                .font(.system(size: 12, weight: .bold))
-                .foregroundColor(.white)
-                .padding(8)
-                .background(bg)
-                .clipShape(Circle())
+    
+    private func saveInterestRejectionCounts() {
+        let defaults = UserDefaults.standard
+        do {
+            let data = try JSONEncoder().encode(interestRejectionCounts)
+            defaults.set(data, forKey: "interest_rejection_counts")
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "saveInterestRejectionCounts() Saved \(interestRejectionCounts.count) rejection counts")
+        } catch {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "saveInterestRejectionCounts() Error saving: \(error.localizedDescription)")
         }
     }
-
-    private func pillChoiceButton(title: String, system: String, bg: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: system)
-                    .font(.system(size: 12, weight: .bold))
-                Text(title)
-                    .font(.system(size: 12, weight: .bold))
-            }
-            .foregroundColor(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(bg)
-            .clipShape(Capsule())
+    
+    // MARK: - Local AboutYou Storage (No initial Firestore read)
+    
+    private func loadAboutYouValuesFromLocal() {
+        let defaults = UserDefaults.standard
+        let aboutYouKey = "about_you_answers"
+        
+        if let data = defaults.data(forKey: aboutYouKey),
+           let values = try? JSONDecoder().decode([String: String].self, from: data) {
+            aboutYouValues = values
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "loadAboutYouValuesFromLocal() Loaded \(values.count) answers from local storage")
+        } else {
+            aboutYouValues = [:]
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "loadAboutYouValuesFromLocal() No local answers found - starting fresh")
+        }
+    }
+    
+    private func saveAboutYouAnswerToLocal(key: String, value: String) {
+        let defaults = UserDefaults.standard
+        let aboutYouKey = "about_you_answers"
+        
+        // Update in-memory cache
+        aboutYouValues[key] = value
+        
+        // Save to local storage
+        if let data = try? JSONEncoder().encode(aboutYouValues) {
+            defaults.set(data, forKey: aboutYouKey)
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "saveAboutYouAnswerToLocal() Saved \(key)=\(value) locally")
         }
     }
 
     private func saveAboutYouAnswer(key: String, yes: Bool) {
         let userId = UserSessionManager.shared.userId ?? ""
-        let value = yes ? "yes" : "no"
-        // Optimistic close (ask one at a time UX)
-        withAnimation { self.entryPill = nil }
+        let value = yes ? "true" : "null"
+        
+        // 1. Save to local storage first (immediate, no network dependency)
+        saveAboutYouAnswerToLocal(key: key, value: value)
+        
+        // 2. Sync to Firestore in background (for cross-device sync)
         let db = Firestore.firestore()
         db.collection("Users").document(userId).setData([key: value], merge: true) { error in
             if let error = error {
-                AppLogger.log(tag: "LOG-APP: MessagesView", message: "saveAboutYouAnswer() error: \(error.localizedDescription)")
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "saveAboutYouAnswer() Firestore sync failed: \(error.localizedDescription)")
+                // Local storage still works, just no cross-device sync
             } else {
-                AppLogger.log(tag: "LOG-APP: MessagesView", message: "saveAboutYouAnswer() saved \(key)=\(value)")
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "saveAboutYouAnswer() Synced \(key)=\(value) to Firestore")
+            }
+        }
+    }
+    
+    // MARK: - Presented Questions Tracking
+    
+    /// Load the tracking data for which AboutYou questions have been presented to the user
+    private func loadPresentedAboutYouQuestions() -> [String: Date] {
+        let defaults = UserDefaults.standard
+        let presentedKey = "about_you_questions_presented"
+        
+        if let data = defaults.data(forKey: presentedKey),
+           let timestamps = try? JSONDecoder().decode([String: TimeInterval].self, from: data) {
+            let presentedQuestions = timestamps.mapValues { Date(timeIntervalSince1970: $0) }
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "loadPresentedAboutYouQuestions() Loaded \(presentedQuestions.count) presented questions")
+            return presentedQuestions
+        } else {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "loadPresentedAboutYouQuestions() No presentation tracking found, starting fresh")
+            return [:]
+        }
+    }
+    
+    /// Mark an AboutYou question as having been presented to the user
+    private func markAboutYouQuestionAsPresented(key: String) {
+        let defaults = UserDefaults.standard
+        let presentedKey = "about_you_questions_presented"
+        
+        // Load existing data
+        var presentedQuestions = loadPresentedAboutYouQuestions()
+        
+        // Add/update the timestamp for this question
+        presentedQuestions[key] = Date()
+        
+        // Save back to UserDefaults
+        let timestamps = presentedQuestions.mapValues { $0.timeIntervalSince1970 }
+        do {
+            let data = try JSONEncoder().encode(timestamps)
+            defaults.set(data, forKey: presentedKey)
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "markAboutYouQuestionAsPresented() Marked '\(key)' as presented at \(Date())")
+        } catch {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "markAboutYouQuestionAsPresented() Error saving: \(error.localizedDescription)")
+        }
+    }
+    
+    /// Clean up old presentation tracking data (optional, for housekeeping)
+    private func cleanupOldPresentedQuestions() {
+        let defaults = UserDefaults.standard
+        let presentedKey = "about_you_questions_presented"
+        let cutoffDate = Date().addingTimeInterval(-90 * 24 * 60 * 60) // 90 days ago
+        
+        var presentedQuestions = loadPresentedAboutYouQuestions()
+        let originalCount = presentedQuestions.count
+        
+        // Remove entries older than 90 days
+        presentedQuestions = presentedQuestions.filter { $0.value > cutoffDate }
+        
+        if presentedQuestions.count != originalCount {
+            let timestamps = presentedQuestions.mapValues { $0.timeIntervalSince1970 }
+            do {
+                let data = try JSONEncoder().encode(timestamps)
+                defaults.set(data, forKey: presentedKey)
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "cleanupOldPresentedQuestions() Cleaned up \(originalCount - presentedQuestions.count) old entries")
+            } catch {
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "cleanupOldPresentedQuestions() Error saving: \(error.localizedDescription)")
+            }
+        }
+    }
+    
+    // MARK: - Optional Background Migration (Non-blocking)
+    
+    private func syncFirestoreToLocalInBackground() {
+        let userId = UserSessionManager.shared.userId ?? ""
+        guard !userId.isEmpty else { return }
+        
+        // Only sync if local storage is empty (migration case)
+        if aboutYouValues.isEmpty {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "syncFirestoreToLocalInBackground() Starting background migration")
+            
+            DispatchQueue.global(qos: .utility).async {
+                Firestore.firestore().collection("Users").document(userId).getDocument { doc, _ in
+                    var values: [String: String] = [:]
+                    if let data = doc?.data() {
+                        let keys = [
+                            // Relationship & Personal Status
+                            "like_men", "like_woman", "single", "married", "children",
+                            // Lifestyle & Activities
+                            "gym", "smokes", "drinks", "games", "decent_chat",
+                            // Interests & Hobbies
+                            "pets", "travel", "music", "movies", "naughty", "foodie", "dates", "fashion",
+                            // Emotional State
+                            "broken", "depressed", "lonely", "cheated", "insomnia",
+                            // Communication Preferences
+                            "voice_allowed", "video_allowed", "pics_allowed"
+                        ]
+                        for k in keys {
+                            if let v = data[k] as? String, !v.isEmpty && v != "null" {
+                                // Migrate old "yes"/"no" format to "true"/"null" format
+                                if v == "yes" {
+                                    values[k] = "true"
+                                } else if v == "no" {
+                                    values[k] = "null"
+                                } else {
+                                    values[k] = v
+                                }
+                            }
+                        }
+                    }
+                    
+                    // Update local storage with migrated data
+                    if !values.isEmpty {
+                        DispatchQueue.main.async {
+                            let defaults = UserDefaults.standard
+                            let aboutYouKey = "about_you_answers"
+                            
+                            if let data = try? JSONEncoder().encode(values) {
+                                defaults.set(data, forKey: aboutYouKey)
+                                self.aboutYouValues = values
+                                AppLogger.log(tag: "LOG-APP: MessagesView", message: "syncFirestoreToLocalInBackground() Migrated \(values.count) answers from Firestore")
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -2075,12 +2328,19 @@ struct MessagesView: View {
         
         AppLogger.log(tag: "LOG-APP: MessagesView", message: "sendMessage() sending message: \(text)")
         
-        // ANDROID PARITY: Check for app name profanity and increment moderation score
-        if Profanity.share.doesContainProfanityAppName(text) {
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "sendMessage() Profanity AppName detected")
+        // ⚡ LAYER 1: Fast Detection + Immediate Action (PRESERVED - NO CHANGES)
+        let appNameViolation = Profanity.share.doesContainProfanityAppName(text)
+        if appNameViolation {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "Layer 1: App name violation detected - applying penalties and restrictions")
             let currentScore = ModerationSettingsSessionManager.shared.hiveTextModerationScore
             ModerationSettingsSessionManager.shared.hiveTextModerationScore = currentScore + 101
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "sendMessage() Updated moderation score to: \(ModerationSettingsSessionManager.shared.hiveTextModerationScore)")
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "Layer 1: Updated moderation score to: \(ModerationSettingsSessionManager.shared.hiveTextModerationScore)")
+            
+            // Apply conversation restriction for app name violations
+            ConversationRestrictionManager.shared.applyRestrictionForAppNameViolation()
+            
+            // Move conversation to inbox immediately for app name violations
+            setMoveToInbox(true)
         }
         
         let messageId = UUID().uuidString
@@ -2090,20 +2350,21 @@ struct MessagesView: View {
         // ANDROID PARITY: Check conversation started status and handle profanity
         checkConversationStarted()
         
-        if !conversationStarted {
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "sendMessage() First message detected")
-            
-            if moveToInbox && bad {
-                AppLogger.log(tag: "LOG-APP: MessagesView", message: "sendMessage() Moving to inbox due to profanity in first message")
-                setMoveToInbox(true)
-            }
-            
-            if bad {
-                AppLogger.log(tag: "LOG-APP: MessagesView", message: "sendMessage() Incrementing moderation score for profanity in first message")
-                let currentScore = ModerationSettingsSessionManager.shared.hiveTextModerationScore
-                ModerationSettingsSessionManager.shared.hiveTextModerationScore = currentScore + 10
-                AppLogger.log(tag: "LOG-APP: MessagesView", message: "sendMessage() Updated moderation score to: \(ModerationSettingsSessionManager.shared.hiveTextModerationScore)")
-            }
+        // IMMEDIATE ACTIONS - First Message Profanity Handling
+        if !conversationStarted && bad {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "Layer 1: First message profanity detected - moving to inbox")
+            let currentScore = ModerationSettingsSessionManager.shared.hiveTextModerationScore
+            ModerationSettingsSessionManager.shared.hiveTextModerationScore = currentScore + 10
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "Layer 1: Updated moderation score to: \(ModerationSettingsSessionManager.shared.hiveTextModerationScore)")
+            // Move conversation to inbox instead of blocking
+            setMoveToInbox(true)
+        }
+        
+        // 🤖 LAYER 2: Advanced Analysis + Silent Data Collection (NEW - NO USER IMPACT)
+        // This runs in background after message passes Layer 1 checks
+        // Silent intelligence collection for compliance and safety analytics
+        DispatchQueue.global(qos: .utility).async {
+            SafetySignalManager.shared.analyzeMessageForSafetySignals(text, userId: self.otherUser.id)
         }
         
         // Android Pattern: Do NOT create local message object
@@ -2156,6 +2417,9 @@ struct MessagesView: View {
                     // Increment per-user message count for message limit popup
                     MessagingSettingsSessionManager.shared.incrementMessageCount(otherUserId: self.otherUser.id)
                     
+                    // Track activity for comprehensive user analytics
+                    ActivityTracker.shared.trackMessageSent(to: self.otherUser.id, otherUserGender: self.otherUser.gender)
+                    
                     // MARK: - Android Parity: Convert Inbox Chat to Regular Chat
                     // When user sends message from inbox chat, convert it to regular chat (matching Android's setInBox(false))
                     // Note: Only updates Firebase - local database will be updated by ChatsSyncService listener
@@ -2163,14 +2427,20 @@ struct MessagesView: View {
                         self.setInBox(false)
                     }
                     
+                    // MARK: - Simplified Interest Processing
+                    // Process message for interest detection and queue for InfoGatherPill timing system
+                    SimplifiedInterestManager.shared.processNewMessage(text)
+                    
+                    // CRITICAL FIX: Check if we should show a pill immediately after new suggestions are added
+                    // This ensures pills appear promptly when new interests are detected during chat
+                    triggerImmediatePillCheckIfNeeded()
+                    
                     // MARK: - Contextual Notification Permission Request
                     // Show notification permission popup after first message is successfully sent
                     // This provides the perfect context for users to understand the value of notifications
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                         self.checkAndShowNotificationPermissionPopup()
                     }
-                    
-                    // Removed Interests Popup Trigger
                 }
             }
         
@@ -3053,7 +3323,7 @@ struct MessagesView: View {
         
         // Android Pattern: Check permissions first (camera and microphone)
         if !hasPermission(for: .microphone) || !hasPermission(for: .camera) {
-            permissionDialogType = .microphoneAndCamera
+            permissionDialogType = .liveFeature
             showPermissionDialog = true
             return
         }
@@ -4156,106 +4426,7 @@ struct MarqueeText: View {
 
 
 
-// MARK: - Adaptive Entry Pill (single-row when fits, two-row otherwise)
-// Removed adaptive layout for simplicity and to reduce height
-private struct EntryPillAdaptiveView: View {
-    let question: String
-    let yesTitle: String
-    let yesSystem: String
-    let noTitle: String
-    let noSystem: String
-    let gradientColors: [Color]
-    var onYes: () -> Void
-    var onNo: () -> Void
 
-    @State private var questionWidth: CGFloat = 0
-    @State private var availableWidth: CGFloat = 0
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            // Measure available width
-            GeometryReader { proxy in
-                Color.clear
-                    .onAppear { availableWidth = proxy.size.width - 28 }
-                    .onChange(of: proxy.size.width) { newWidth in
-                        availableWidth = newWidth - 28
-                    }
-            }
-            .frame(height: 0)
-
-            // Invisible measurement for question text (single-line width)
-            Text(question)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundColor(.clear)
-                .lineLimit(1)
-                .background(
-                    GeometryReader { g in
-                        Color.clear
-                            .onAppear { questionWidth = g.size.width }
-                            .onChange(of: g.size.width) { newWidth in questionWidth = newWidth }
-                    }
-                )
-                .hidden()
-
-            if fitsSingleRow(availableWidth: availableWidth) {
-                HStack(spacing: 10) {
-                    Text(question)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                    Spacer(minLength: 0)
-                    pillButton(title: yesTitle, system: yesSystem, bg: Color.white.opacity(0.2), action: onYes)
-                    pillButton(title: noTitle, system: noSystem, bg: Color.white.opacity(0.15), action: onNo)
-                }
-            } else {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(question)
-                        .font(.system(size: 15, weight: .semibold))
-                        .foregroundColor(.white)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .multilineTextAlignment(.leading)
-                    HStack(spacing: 10) {
-                        Spacer(minLength: 0)
-                        pillButton(title: yesTitle, system: yesSystem, bg: Color.white.opacity(0.2), action: onYes)
-                        pillButton(title: noTitle, system: noSystem, bg: Color.white.opacity(0.15), action: onNo)
-                    }
-                }
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 14)
-        .frame(maxWidth: .infinity)
-        .background(
-            LinearGradient(colors: gradientColors, startPoint: .topLeading, endPoint: .bottomTrailing)
-        )
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-    }
-
-    private func pillButton(title: String, system: String, bg: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: 6) {
-                Image(systemName: system)
-                    .font(.system(size: 12, weight: .bold))
-                Text(title)
-                    .font(.system(size: 12, weight: .bold))
-            }
-            .foregroundColor(.white)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 8)
-            .background(bg)
-            .clipShape(Capsule())
-        }
-    }
-
-    private func fitsSingleRow(availableWidth: CGFloat) -> Bool {
-        // Approximate: question + two buttons widths should fit available width
-        // Buttons are relatively constant width (~80 each including padding). Use 170 as heuristic.
-        let buttonsWidth: CGFloat = 170
-        guard availableWidth > 0, questionWidth > 0 else { return false }
-        return (questionWidth + buttonsWidth) <= availableWidth
-    }
-}
 
 #Preview {
     MessagesView(

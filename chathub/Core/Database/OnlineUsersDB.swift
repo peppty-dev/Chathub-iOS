@@ -62,6 +62,13 @@ class OnlineUsersDB {
         
         AppLogger.log(tag: "LOG-APP: OnlineUsersDB", message: "createTableIfNeeded() - Starting table creation/verification")
         
+        // Check if table exists and has correct schema
+        if self.tableExistsWithIncorrectSchema(db: db) {
+            AppLogger.log(tag: "LOG-APP: OnlineUsersDB", message: "createTableIfNeeded() - Table exists with incorrect schema, dropping and recreating")
+            self.dropAndRecreateTable(db: db)
+            return
+        }
+        
         // ANDROID PARITY: Create table with complete schema matching Android Online_Users_Table
         let createTableString = """
         CREATE TABLE IF NOT EXISTS OnlineUsers (
@@ -104,6 +111,116 @@ class OnlineUsersDB {
             // Create indexes for performance (Android parity)
             self.createIndexesInner(db: db)
         }
+    }
+    
+    // Helper method to check if table exists with incorrect schema
+    private func tableExistsWithIncorrectSchema(db: OpaquePointer) -> Bool {
+        // First check if table exists
+        let checkTableQuery = "SELECT name FROM sqlite_master WHERE type='table' AND name='OnlineUsers'"
+        var checkStatement: OpaquePointer?
+        var tableExists = false
+        
+        if sqlite3_prepare_v2(db, checkTableQuery, -1, &checkStatement, nil) == SQLITE_OK {
+            if sqlite3_step(checkStatement) == SQLITE_ROW {
+                tableExists = true
+            }
+        }
+        sqlite3_finalize(checkStatement)
+        
+        if !tableExists {
+            return false // Table doesn't exist, so it's not incorrect
+        }
+        
+        // Check if required columns exist
+        let checkSchemaQuery = "PRAGMA table_info(OnlineUsers)"
+        var schemaStatement: OpaquePointer?
+        var hasUserLanguage = false
+        var hasUserLastTimeSeen = false
+        var hasIsAd = false
+        
+        if sqlite3_prepare_v2(db, checkSchemaQuery, -1, &schemaStatement, nil) == SQLITE_OK {
+            while sqlite3_step(schemaStatement) == SQLITE_ROW {
+                let columnName = String(cString: sqlite3_column_text(schemaStatement, 1))
+                
+                switch columnName {
+                case "user_language":
+                    hasUserLanguage = true
+                case "user_last_time_seen":
+                    hasUserLastTimeSeen = true
+                case "isAd":
+                    hasIsAd = true
+                default:
+                    break
+                }
+            }
+        }
+        sqlite3_finalize(schemaStatement)
+        
+        // If any required columns are missing, schema is incorrect
+        let hasCorrectSchema = hasUserLanguage && hasUserLastTimeSeen && hasIsAd
+        
+        if !hasCorrectSchema {
+            AppLogger.log(tag: "LOG-APP: OnlineUsersDB", message: "tableExistsWithIncorrectSchema() - Missing columns: user_language=\(hasUserLanguage), user_last_time_seen=\(hasUserLastTimeSeen), isAd=\(hasIsAd)")
+        }
+        
+        return !hasCorrectSchema
+    }
+    
+    // Helper method to drop and recreate table with correct schema
+    private func dropAndRecreateTable(db: OpaquePointer) {
+        // Drop existing table
+        let dropTableString = "DROP TABLE IF EXISTS OnlineUsers"
+        var dropTableStatement: OpaquePointer?
+        
+        if sqlite3_prepare_v2(db, dropTableString, -1, &dropTableStatement, nil) == SQLITE_OK {
+            if sqlite3_step(dropTableStatement) == SQLITE_DONE {
+                AppLogger.log(tag: "LOG-APP: OnlineUsersDB", message: "dropAndRecreateTable() - Table dropped successfully")
+            } else {
+                AppLogger.log(tag: "LOG-APP: OnlineUsersDB", message: "dropAndRecreateTable() - Failed to drop table: \(String(cString: sqlite3_errmsg(db)))")
+            }
+        } else {
+            AppLogger.log(tag: "LOG-APP: OnlineUsersDB", message: "dropAndRecreateTable() - Failed to prepare drop statement: \(String(cString: sqlite3_errmsg(db)))")
+        }
+        sqlite3_finalize(dropTableStatement)
+        
+        // Recreate table with correct schema
+        let createTableString = """
+        CREATE TABLE OnlineUsers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT UNIQUE NOT NULL,
+            user_name TEXT NOT NULL DEFAULT '',
+            user_image TEXT DEFAULT '',
+            user_gender TEXT DEFAULT '',
+            user_country TEXT DEFAULT '',
+            user_language TEXT DEFAULT '',
+            user_age TEXT DEFAULT '',
+            user_device_id TEXT DEFAULT '',
+            user_device_token TEXT DEFAULT '',
+            user_area TEXT DEFAULT '',
+            user_city TEXT DEFAULT '',
+            user_state TEXT DEFAULT '',
+            user_decent_time INTEGER DEFAULT 0,
+            user_last_time_seen INTEGER DEFAULT 0,
+            isAd INTEGER DEFAULT 0,
+            UNIQUE(user_id) ON CONFLICT REPLACE
+        );
+        """
+        
+        var createTableStatement: OpaquePointer?
+        
+        if sqlite3_prepare_v2(db, createTableString, -1, &createTableStatement, nil) == SQLITE_OK {
+            if sqlite3_step(createTableStatement) == SQLITE_DONE {
+                AppLogger.log(tag: "LOG-APP: OnlineUsersDB", message: "dropAndRecreateTable() - Table recreated successfully with correct schema")
+                
+                // Create indexes after table recreation
+                self.createIndexesInner(db: db)
+            } else {
+                AppLogger.log(tag: "LOG-APP: OnlineUsersDB", message: "dropAndRecreateTable() - Failed to recreate table: \(String(cString: sqlite3_errmsg(db)))")
+            }
+        } else {
+            AppLogger.log(tag: "LOG-APP: OnlineUsersDB", message: "dropAndRecreateTable() - Failed to prepare create statement: \(String(cString: sqlite3_errmsg(db)))")
+        }
+        sqlite3_finalize(createTableStatement)
     }
 
     

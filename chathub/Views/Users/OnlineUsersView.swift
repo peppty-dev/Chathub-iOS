@@ -419,9 +419,9 @@ struct OnlineUsersView: View {
     
     // Android parity: Check all subscription types like Android does
     private var isAnySubscriptionActive: Bool {
-        subscriptionManager.isUserSubscribedToLite() ||
-        subscriptionManager.isUserSubscribedToPlus() ||
-        subscriptionManager.isUserSubscribedToPro()
+        subscriptionManager.hasLiteTierOrHigher() ||
+        subscriptionManager.hasPlusTierOrHigher() ||
+        subscriptionManager.hasProTier()
     }
     
     // Keep legacy property for backward compatibility
@@ -588,21 +588,22 @@ struct OnlineUsersView: View {
                 AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - hasMore: \(viewModel.hasMore)")
                 AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - hasInitiallyLoaded: \(hasInitiallyLoaded)")
                 
-                // FIXED: Only set hasInitiallyLoaded to true if we actually have data
-                // This ensures we keep trying to load data until we have some
+                // CRITICAL FIX: Use completion-based loading to properly wait for async Firebase sync
+                // This ensures we keep trying to load data until we actually have some
                 if !hasInitiallyLoaded || viewModel.users.isEmpty {
                     AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - First time loading or no data present, checking if data load needed")
                     
-                    // Use proper initial load method that respects data state and 30-minute logic
-                    AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - Calling initialLoadIfNeeded")
-                    viewModel.initialLoadIfNeeded()
-                    
-                    // Only set the flag to true if we actually have data now
-                    if !viewModel.users.isEmpty {
-                        hasInitiallyLoaded = true
-                        AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - Data loaded successfully, setting hasInitiallyLoaded to true")
-                    } else {
-                        AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - No data loaded yet, will retry on next view appearance")
+                    // Use new completion-based initial load method that waits for Firebase sync
+                    AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - Calling initialLoadIfNeeded with completion handler")
+                    viewModel.initialLoadIfNeeded { success in
+                        DispatchQueue.main.async {
+                            if success && !viewModel.users.isEmpty {
+                                hasInitiallyLoaded = true
+                                AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - Data loaded successfully (\(viewModel.users.count) users), setting hasInitiallyLoaded to true")
+                            } else {
+                                AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - No data loaded yet (success: \(success), users: \(viewModel.users.count)), will retry on next view appearance")
+                            }
+                        }
                     }
                 } else {
                     AppLogger.log(tag: "LOG-APP: OnlineUsersView", message: "viewDidAppear() - Already loaded before with data (\(viewModel.users.count) users), skipping reload")

@@ -110,6 +110,15 @@ struct ProfileView: View {
     // MARK: - Conversation Flow Tracking
     @State private var conversationFlowSessionId: String?
     @State private var conversationFlowStartTime: Date?
+    
+    // MARK: - AI Detection (Debug Support)
+    @State private var otherUserIpAddress: String?
+    @State private var otherUserLastSeenTime: Double = 0
+    
+    private var shouldShowAIIndicator: Bool {
+        // Show AI indicator if AI takeover is likely to happen based on current conditions
+        return shouldAiTakeOver()
+    }
 
     var body: some View {
         ZStack {
@@ -122,17 +131,17 @@ struct ProfileView: View {
                     isLimitReached: result.isLimitReached,
                     currentUsage: result.currentUsage,
                     limit: result.limit,
-                    onStartConversation: { 
+                    onStartConversation: {
                         AppLogger.log(tag: "LOG-APP: ProfileView", message: "ConversationLimitPopup onStartConversation callback - resetting popup state")
                         showConversationLimitPopup = false
                         conversationLimitResult = nil
-                        handleStartConversationFromPopup() 
+                        handleStartConversationFromPopup()
                     },
-                    onUpgradeToPremium: { 
+                    onUpgradeToPremium: {
                         AppLogger.log(tag: "LOG-APP: ProfileView", message: "ConversationLimitPopup onUpgradeToPremium callback - resetting popup state")
                         showConversationLimitPopup = false
                         conversationLimitResult = nil
-                        navigateToSubscription() 
+                        navigateToSubscription()
                     },
                     isShadowBan: ModerationSettingsSessionManager.shared.textModerationIssueSB && result.remainingCooldown > 0
                 )
@@ -209,6 +218,9 @@ struct ProfileView: View {
             
             // CRITICAL FIX: Load profile data immediately following the same pattern as other views
             loadProfileDataImmediately()
+            
+            // Fetch other user metadata for AI takeover logic (Android parity)
+            fetchOtherUserMetadata()
         }
         .onDisappear {
             // CRITICAL FIX: Reset popup states when view disappears to prevent stale values
@@ -516,11 +528,22 @@ struct ProfileView: View {
                 // Show username immediately if available from online users list (ONLY username, no other details)
                 VStack(spacing: 8) {
                     if let userName = initialUserName {
-                        Text(Profanity.share.removeProfanityNumbersAllowed(userName))
-                            .font(.system(size: 26, weight: .bold))
-                            .foregroundColor(Color("dark"))
-                            .multilineTextAlignment(.center)
-                            .lineLimit(2)
+                        HStack(spacing: 6) {
+                            Text(Profanity.share.removeProfanityNumbersAllowed(userName))
+                                .font(.system(size: 26, weight: .bold))
+                                .foregroundColor(Color("dark"))
+                                .multilineTextAlignment(.center)
+                                .lineLimit(2)
+                            
+                            // DEBUG ONLY: AI indicator dot (skeleton state)
+                            #if DEBUG
+                            if shouldShowAIIndicator {
+                                Circle()
+                                    .fill(Color.red)
+                                    .frame(width: 8, height: 8)
+                            }
+                            #endif
+                        }
                     } else {
                         Spacer()
                             .frame(height: 26) // Reserve space for username
@@ -656,11 +679,22 @@ struct ProfileView: View {
                 
                 // User Name with standardized typography (matching EditProfileView)
                 VStack(spacing: 8) {
-                    Text(Profanity.share.removeProfanityNumbersAllowed(profile.name))
-                        .font(.system(size: 26, weight: .bold)) // Standardized font size matching EditProfileView
-                        .foregroundColor(Color("dark"))
-                        .multilineTextAlignment(.center)
-                        .lineLimit(2)
+                    HStack(spacing: 6) {
+                        Text(Profanity.share.removeProfanityNumbersAllowed(profile.name))
+                            .font(.system(size: 26, weight: .bold)) // Standardized font size matching EditProfileView
+                            .foregroundColor(Color("dark"))
+                            .multilineTextAlignment(.center)
+                            .lineLimit(2)
+                        
+                        // DEBUG ONLY: AI indicator dot
+                        #if DEBUG
+                        if shouldShowAIIndicator {
+                            Circle()
+                                .fill(Color.red)
+                                .frame(width: 8, height: 8)
+                        }
+                        #endif
+                    }
                     
                     // Online status with enhanced styling
                     if profile.isOnline {
@@ -728,8 +762,8 @@ struct ProfileView: View {
         let subscriptionExpiry = profile.subscriptionExpiry ?? 0
         let subscriptionTier = profile.subscriptionTier ?? ""
         let currentTime = Int64(Date().timeIntervalSince1970)
-        let hasSubscription = !subscriptionTier.isEmpty && 
-                              subscriptionTier != "none" && 
+        let hasSubscription = !subscriptionTier.isEmpty &&
+                              subscriptionTier != "none" &&
                               subscriptionExpiry > currentTime
         
         if userDetails.isEmpty && !hasSubscription {
@@ -805,8 +839,8 @@ struct ProfileView: View {
         let subscriptionTier = profile.subscriptionTier ?? ""
         let currentTime = Int64(Date().timeIntervalSince1970)
         
-        let isSubscribed = !subscriptionTier.isEmpty && 
-                          subscriptionTier != "none" && 
+        let isSubscribed = !subscriptionTier.isEmpty &&
+                          subscriptionTier != "none" &&
                           subscriptionExpiry > currentTime
         
         if isSubscribed {
@@ -945,7 +979,7 @@ struct ProfileView: View {
                 
                 // Call Button - Secondary action
                 EnhancedActionButton(
-                    icon: "phone.fill", 
+                    icon: "phone.fill",
                     title: "Call",
                     backgroundColor: Color("shade2"),
                     iconColor: .green,
@@ -2132,6 +2166,7 @@ struct ProfileView: View {
             onChatCreated: { (chatId: String, otherUserId: String) in
                 AppLogger.log(tag: "LOG-APP: ProfileView", message: "proceedToChat() Chat created successfully: \(chatId)")
                 DispatchQueue.main.async {
+
                     self.navigateToMessageView(chatId: chatId, otherUserId: otherUserId)
                 }
             },
@@ -2160,6 +2195,7 @@ struct ProfileView: View {
             onChatCreated: { (chatId: String, otherUserId: String) in
                 AppLogger.log(tag: "LOG-APP: ProfileView", message: "executeRoutingDecisionFlow() Chat created successfully: \(chatId)")
                 DispatchQueue.main.async {
+
                     self.navigateToMessageView(chatId: chatId, otherUserId: otherUserId)
                 }
             },
@@ -2222,6 +2258,7 @@ struct ProfileView: View {
                 }
                 
                 DispatchQueue.main.async {
+
                     self.navigateToMessageView(chatId: chatId, otherUserId: otherUserId)
                 }
             },
@@ -2272,6 +2309,7 @@ struct ProfileView: View {
             onChatCreated: { (chatId: String, otherUserId: String) in
                 AppLogger.log(tag: "LOG-APP: ProfileView", message: "onRewarded() Chat created successfully: \(chatId)")
                 DispatchQueue.main.async {
+
                     self.navigateToMessageView(chatId: chatId, otherUserId: otherUserId)
                 }
             },
@@ -2307,8 +2345,8 @@ struct ProfileView: View {
         
         // Check subscription status - calls require Plus or Pro (matching Android)
         let subscriptionManager = SubscriptionSessionManager.shared
-        let isPlusSubscriber = subscriptionManager.isUserSubscribedToPlus()
-        let isProSubscriber = subscriptionManager.isUserSubscribedToPro()
+        let isPlusSubscriber = subscriptionManager.hasPlusTierOrHigher()
+        let isProSubscriber = subscriptionManager.hasProTier()
         
         if isPlusSubscriber || isProSubscriber {
             // Directly initiate voice call after checking if user is busy
@@ -2332,8 +2370,8 @@ struct ProfileView: View {
         
         // Check subscription status - video calls require Plus or Pro (matching Android)
         let subscriptionManager = SubscriptionSessionManager.shared
-        let isPlusSubscriber = subscriptionManager.isUserSubscribedToPlus()
-        let isProSubscriber = subscriptionManager.isUserSubscribedToPro()
+        let isPlusSubscriber = subscriptionManager.hasPlusTierOrHigher()
+        let isProSubscriber = subscriptionManager.hasProTier()
         
         if isPlusSubscriber || isProSubscriber {
             // Directly initiate video call after checking if user is busy
@@ -2389,11 +2427,17 @@ struct ProfileView: View {
     private func hasPermission(for type: PermissionType) -> Bool {
         switch type {
         case .microphone:
-            return AVAudioSession.sharedInstance().recordPermission == .granted
+            if #available(iOS 17.0, *) {
+                return AVAudioApplication.shared.recordPermission == .granted
+            } else {
+                return AVAudioSession.sharedInstance().recordPermission == .granted
+            }
         case .camera:
             return AVCaptureDevice.authorizationStatus(for: .video) == .authorized
         case .microphoneAndCamera:
             return hasPermission(for: .microphone) && hasPermission(for: .camera)
+        case .liveFeature:
+            return hasPermission(for: .microphoneAndCamera)
         }
     }
     
@@ -2402,10 +2446,20 @@ struct ProfileView: View {
         
         switch permissionDialogType {
         case .microphone:
-            AVAudioSession.sharedInstance().requestRecordPermission { granted in
-                if granted {
-                    DispatchQueue.main.async {
-                        self.handleCallButtonTap()
+            if #available(iOS 17.0, *) {
+                AVAudioApplication.requestRecordPermission { granted in
+                    if granted {
+                        DispatchQueue.main.async {
+                            self.handleCallButtonTap()
+                        }
+                    }
+                }
+            } else {
+                AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                    if granted {
+                        DispatchQueue.main.async {
+                            self.handleCallButtonTap()
+                        }
                     }
                 }
             }
@@ -2418,12 +2472,56 @@ struct ProfileView: View {
                 }
             }
         case .microphoneAndCamera:
-            AVAudioSession.sharedInstance().requestRecordPermission { audioGranted in
-                if audioGranted {
-                    AVCaptureDevice.requestAccess(for: .video) { videoGranted in
-                        if videoGranted {
-                            DispatchQueue.main.async {
-                                self.handleVideoCallButtonTap()
+            if #available(iOS 17.0, *) {
+                AVAudioApplication.requestRecordPermission { audioGranted in
+                    if audioGranted {
+                        AVCaptureDevice.requestAccess(for: .video) { videoGranted in
+                            if videoGranted {
+                                DispatchQueue.main.async {
+                                    self.handleVideoCallButtonTap()
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                AVAudioSession.sharedInstance().requestRecordPermission { audioGranted in
+                    if audioGranted {
+                        AVCaptureDevice.requestAccess(for: .video) { videoGranted in
+                            if videoGranted {
+                                DispatchQueue.main.async {
+                                    self.handleVideoCallButtonTap()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        case .liveFeature:
+            if #available(iOS 17.0, *) {
+                AVAudioApplication.requestRecordPermission { audioGranted in
+                    if audioGranted {
+                        AVCaptureDevice.requestAccess(for: .video) { videoGranted in
+                            if videoGranted {
+                                DispatchQueue.main.async {
+                                    // Handle live feature permission granted
+                                    // This can be customized based on what live feature should do
+                                    self.handleVideoCallButtonTap()
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                AVAudioSession.sharedInstance().requestRecordPermission { audioGranted in
+                    if audioGranted {
+                        AVCaptureDevice.requestAccess(for: .video) { videoGranted in
+                            if videoGranted {
+                                DispatchQueue.main.async {
+                                    // Handle live feature permission granted
+                                    // This can be customized based on what live feature should do
+                                    self.handleVideoCallButtonTap()
+                                }
                             }
                         }
                     }
@@ -2440,6 +2538,8 @@ struct ProfileView: View {
             return "Camera permission is required to start a video call"
         case .microphoneAndCamera:
             return "Microphone and camera permissions are required to start a video call"
+        case .liveFeature:
+            return "Microphone and camera permissions are required for live features"
         }
     }
     
@@ -2538,18 +2638,216 @@ struct ProfileView: View {
 
     // MARK: - AI Functionality
     private func fetchAIMessages() {
-        aiTrainingMessages = AITrainingMessageStore.shared.getMessagesForChat(chatId: otherUserId)
-        AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchAIMessages() fetched \(aiTrainingMessages.count) AI messages")
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchAIMessages() Starting AI messages fetch from Firebase")
+        
+        // ANDROID PARITY: First fetch from Firebase like UserProfileActivity, then save to local DB
+        fetchAIMessagesFromFirebaseAndSaveToLocal {
+            // After Firebase fetch completes, load from local database
+            DispatchQueue.main.async {
+                self.aiTrainingMessages = AITrainingMessageStore.shared.getMessagesForChat(chatId: self.otherUserId)
+                AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchAIMessages() fetched \(self.aiTrainingMessages.count) AI messages")
+            }
+        }
     }
     
-    private func shouldAiTakeOver() -> Bool {
-        // Simplified AI logic - can be enhanced based on requirements
-        let aiChatEnabled = SessionManager.shared.aiChatEnabled
-        let lastMessageTime = SessionManager.shared.lastMessageReceivedTime
-        let maxIdleTime: Double = 600 // 10 minutes
-        let timeElapsed = Date().timeIntervalSince1970 - lastMessageTime
+    // ANDROID PARITY: Fetch AI messages from Firebase and save to local database like UserProfileActivity
+    private func fetchAIMessagesFromFirebaseAndSaveToLocal(completion: @escaping () -> Void) {
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchAIMessagesFromFirebaseAndSaveToLocal() Fetching AI messages from Firebase")
         
-        return aiChatEnabled && timeElapsed > maxIdleTime
+        Firestore.firestore().collection("AIMessages").document("messages").getDocument { document, error in
+            if let error = error {
+                AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchAIMessagesFromFirebaseAndSaveToLocal() Error fetching AI messages: \(error.localizedDescription)")
+                completion()
+                return
+            }
+            
+            guard let document = document, document.exists,
+                  let data = document.data(),
+                  let formattedMessages = data["formatted_messages"] as? String else {
+                AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchAIMessagesFromFirebaseAndSaveToLocal() No AI messages found or document doesn't exist")
+                completion()
+                return
+            }
+            
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchAIMessagesFromFirebaseAndSaveToLocal() Successfully fetched AI messages from Firebase")
+            
+            // ANDROID PARITY: Parse and save to local database like UserProfileActivity
+            self.parseAndSaveAIMessages(formattedMessages: formattedMessages, chatId: self.otherUserId) {
+                completion()
+            }
+        }
+    }
+    
+    // ANDROID PARITY: Parse formatted messages and save to local database like UserProfileActivity
+    private func parseAndSaveAIMessages(formattedMessages: String, chatId: String, completion: @escaping () -> Void) {
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "parseAndSaveAIMessages() Parsing and saving AI messages to local database")
+        
+        DispatchQueue.global(qos: .background).async {
+            // ANDROID PARITY: First delete existing messages for this chat like UserProfileActivity
+            AITrainingMessageStore.shared.deleteMessagesForChat(chatId: chatId)
+            
+            let lines = formattedMessages.components(separatedBy: "\n")
+            
+            // ANDROID PARITY: Process messages in pairs like UserProfileActivity
+            var i = 0
+            while i < lines.count - 1 {
+                let userLine = lines[i].trimmingCharacters(in: .whitespacesAndNewlines)
+                let replyLine = lines[i + 1].trimmingCharacters(in: .whitespacesAndNewlines)
+                
+                // Parse user message
+                let userParts = userLine.components(separatedBy: "'s message: ")
+                if userParts.count == 2 {
+                    let userName = userParts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+                    let userMessage = userParts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                    
+                    // Parse reply message
+                    let replyParts = replyLine.components(separatedBy: "'s reply: ")
+                    if replyParts.count == 2 {
+                        let replyName = replyParts[0].trimmingCharacters(in: .whitespacesAndNewlines)
+                        let replyMessage = replyParts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                        
+                        // Create and save the AI training message like UserProfileActivity
+                        AITrainingMessageStore.shared.insert(
+                            messageId: UUID().uuidString,
+                            chatId: chatId,
+                            userName: userName,
+                            userMessage: userMessage,
+                            replyName: replyName,
+                            replyMessage: replyMessage,
+                            messageTime: Date().timeIntervalSince1970
+                        )
+                        
+                        AppLogger.log(tag: "LOG-APP: ProfileView", message: "parseAndSaveAIMessages() Saved AI training message: \(userName) -> \(replyName)")
+                    }
+                }
+                
+                i += 2
+            }
+            
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "parseAndSaveAIMessages() Completed parsing and saving AI messages")
+            DispatchQueue.main.async {
+                completion()
+            }
+        }
+    }
+    
+    // MARK: - AI Takeover Logic (Android Parity)
+    private func shouldAiTakeOver() -> Bool {
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "shouldAiTakeOver() checking AI takeover conditions")
+        
+        // Null check for otherUserId (Android OTHERUSERID validation)
+        guard !otherUserId.isEmpty else {
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "Error: otherUserId is empty in shouldAiTakeOver")
+            return false
+        }
+        
+        let sessionManager = SessionManager.shared
+        let timeElapsedSinceLastMessageReceived = Date().timeIntervalSince1970 - Double(sessionManager.lastMessageReceivedTime)
+        
+        // Check if users are from same city (Android parity)
+        let myCity = sessionManager.getUserRetrievedCity()
+        let otherUserCity = userProfile?.city?.replacingOccurrences(of: "Around ", with: "") ?? ""
+        let sameCity = myCity != nil && !myCity!.isEmpty && !otherUserCity.isEmpty && 
+                      myCity!.caseInsensitiveCompare(otherUserCity) == .orderedSame
+        
+        // Check if users have same IP address (compare first 3 octets for privacy - Android parity)
+        let myIpAddress = sessionManager.getUserRetrievedIp()
+        var sameIpAddress = false
+        
+        if let myIp = myIpAddress, let otherIp = otherUserIpAddress,
+           !myIp.isEmpty && !otherIp.isEmpty {
+            let myIpParts = myIp.components(separatedBy: ".")
+            let otherIpParts = otherIp.components(separatedBy: ".")
+            
+            if myIpParts.count >= 3 && otherIpParts.count >= 3 {
+                sameIpAddress = myIpParts[0] == otherIpParts[0] && 
+                               myIpParts[1] == otherIpParts[1] && 
+                               myIpParts[2] == otherIpParts[2]
+            }
+        }
+        
+        // Get other user online status and last seen time
+        let otherUserOnline = userProfile?.isOnline ?? false
+        let currentTime = Date().timeIntervalSince1970
+        
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: """
+            shouldAiTakeOver() conditions:
+            aiChatEnabled: \(sessionManager.aiChatEnabled)
+            timeElapsed: \(timeElapsedSinceLastMessageReceived)
+            maxIdleTime: \(sessionManager.maxIdleSecondsForAiChatEnabling)
+            otherUserOnline: \(otherUserOnline)
+            aiCoolOffTime: \(sessionManager.getAiCoolOffTime())
+            currentTime: \(currentTime)
+            lastSeenTime: \(otherUserLastSeenTime)
+            minOfflineSeconds: \(sessionManager.minOfflineSecondsForAiChatEnabling)
+            sameCity: \(sameCity) (my: '\(myCity ?? "nil")', other: '\(otherUserCity)')
+            sameIpAddress: \(sameIpAddress) (my: '\(myIpAddress ?? "nil")', other: '\(otherUserIpAddress ?? "nil")')
+            """)
+        
+        var shouldAiTakeOver = false
+        
+        // Only proceed with AI chat check if users are not from same city and don't have same IP (Android parity)
+        if !sameCity && !sameIpAddress {
+            if sessionManager.aiChatEnabled {
+                if timeElapsedSinceLastMessageReceived > Double(sessionManager.maxIdleSecondsForAiChatEnabling) {
+                    let coolOffExpired = (sessionManager.getAiCoolOffTime() + 60) < Int64(currentTime)
+                    
+                    if otherUserOnline {
+                        // User is online - check cooloff time (Android parity)
+                        AppLogger.log(tag: "LOG-APP: ProfileView", message: "shouldAiTakeOver() Online user - coolOffExpired: \(coolOffExpired)")
+                        if coolOffExpired {
+                            shouldAiTakeOver = true
+                        }
+                    } else {
+                        // User is offline - only enable AI if they were recently offline (within minOfflineSeconds) AND cooloff expired (Android parity)
+                        let recentlyOffline = (otherUserLastSeenTime + Double(sessionManager.minOfflineSecondsForAiChatEnabling)) > currentTime
+                        AppLogger.log(tag: "LOG-APP: ProfileView", message: "shouldAiTakeOver() Offline user - recentlyOffline: \(recentlyOffline), coolOffExpired: \(coolOffExpired)")
+                        AppLogger.log(tag: "LOG-APP: ProfileView", message: "shouldAiTakeOver() Calculation: (\(otherUserLastSeenTime) + \(sessionManager.minOfflineSecondsForAiChatEnabling)) > \(currentTime) = \(otherUserLastSeenTime + Double(sessionManager.minOfflineSecondsForAiChatEnabling)) > \(currentTime)")
+                        if recentlyOffline && coolOffExpired {
+                            shouldAiTakeOver = true
+                        }
+                    }
+                }
+            }
+        }
+        
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "shouldAiTakeOver() result: \(shouldAiTakeOver)")
+        return shouldAiTakeOver
+    }
+    
+    // MARK: - Fetch Other User IP and Last Seen (Android Parity)
+    private func fetchOtherUserMetadata() {
+        guard !otherUserId.isEmpty else { return }
+        
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchOtherUserMetadata() fetching IP and last seen for user: \(otherUserId)")
+        
+        Firestore.firestore().collection("Users").document(otherUserId).getDocument { documentSnapshot, error in
+            if let error = error {
+                AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchOtherUserMetadata() error: \(error.localizedDescription)")
+                return
+            }
+            
+            if let document = documentSnapshot, document.exists {
+                AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchOtherUserMetadata() document exists, processing...")
+                DispatchQueue.main.async {
+                    // Get other user's IP address (Android parity)
+                    if let userRetrievedIp = document.get("userRetrievedIp") as? String {
+                        self.otherUserIpAddress = userRetrievedIp
+                        AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchOtherUserMetadata() other user IP: \(userRetrievedIp)")
+                    } else {
+                        AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchOtherUserMetadata() userRetrievedIp not found in document")
+                    }
+                    
+                    // Get other user's last seen time (Android parity: "last_time_seen")
+                    if let lastSeenTimestamp = document.get("last_time_seen") as? Timestamp {
+                        self.otherUserLastSeenTime = lastSeenTimestamp.dateValue().timeIntervalSince1970
+                        AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchOtherUserMetadata() other user last seen: \(self.otherUserLastSeenTime)")
+                    } else {
+                        AppLogger.log(tag: "LOG-APP: ProfileView", message: "fetchOtherUserMetadata() last_time_seen not found in document")
+                    }
+                }
+            }
+        }
     }
     
     // MARK: - Enhanced Action Button Component
@@ -2604,8 +2902,8 @@ struct ProfileView: View {
                                 // Subtle inner shadow for depth
                                 Circle()
                                     .strokeBorder(
-                                        isPrimary ? 
-                                        Color.white.opacity(0.3) : 
+                                        isPrimary ?
+                                        Color.white.opacity(0.3) :
                                         Color.black.opacity(0.1),
                                         lineWidth: 1
                                     )
@@ -2854,7 +3152,7 @@ struct UserDetailChip: View {
         if d.contains("created:") { return Color(.systemIndigo) } // Indigo = account creation date
         if d.contains("days old") { return Color(.systemCyan) } // Cyan = account age/duration
         
-        // ✅ Platform & Demographics  
+        // ✅ Platform & Demographics
         if d == "iphone" { return .black } // Black = Apple branding
         if d == "android" { return Color(.systemGreen) } // Green = Android branding
         if d.contains("years old") { return Color(.systemOrange) } // Orange = age/demographics
@@ -3140,8 +3438,8 @@ struct EnhancedUserDetailChip: View {
         if d == "female" { return "person.fill" }
         if d == "english" { return "bubble.left.and.bubble.right.fill" }
         if d.contains("around ") { return "location.circle.fill" }
-        if isCountry(detail) && CountryLanguageHelper.getFlagAssetName(for: detail) != nil { 
-            return CountryLanguageHelper.getFlagAssetName(for: detail) 
+        if isCountry(detail) && CountryLanguageHelper.getFlagAssetName(for: detail) != nil {
+            return CountryLanguageHelper.getFlagAssetName(for: detail)
         }
         if isCountry(detail) { return "flag.fill" }
         if d.contains("'") || d.contains("\"") { return "ruler.fill" }
@@ -3177,6 +3475,5 @@ struct ProfileView_Previews: PreviewProvider {
         ProfileView(otherUserId: "test123")
     }
 }
-
 
 

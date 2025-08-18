@@ -64,7 +64,8 @@ class RatingService: ObservableObject {
         ])
         
         if rating >= 4 {
-            // High rating - show App Store review prompt
+            // High rating - close custom popup and show App Store review prompt
+            showRatingDialog = false
             showReviewPrompt()
         } else {
             // Low rating - increment tries and show feedback view

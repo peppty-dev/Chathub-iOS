@@ -29,5 +29,5 @@ enum DirectCallType {
 
 // MARK: - Permission Types
 enum PermissionType {
-    case microphone, camera, microphoneAndCamera
+    case microphone, camera, microphoneAndCamera, liveFeature
 } 

@@ -738,6 +738,18 @@ class SessionManager: ObservableObject {
         set { defaults.set(newValue, forKey: Keys.aiChatBotURL) }
     }
     
+    /// Gets AI cooldown time - Android getAiCoolOffTime() equivalent
+    func getAiCoolOffTime() -> Int64 {
+        return Int64(defaults.integer(forKey: "aiCoolOffTime"))
+    }
+    
+    /// Sets AI cooldown time - Android setAiCoolOffTime() equivalent
+    func setAiCoolOffTime(_ time: Int64) {
+        defaults.set(Int(time), forKey: "aiCoolOffTime")
+        defaults.synchronize()
+        AppLogger.log(tag: "LOG-APP: SessionManager", message: "setAiCoolOffTime() cooldown set to: \(time)")
+    }
+    
     // MARK: - Monetization and Limits Settings
     
     var newUserFreePeriodSeconds: Int64 {
@@ -1704,6 +1716,11 @@ class SessionManager: ObservableObject {
     /// Gets user retrieved city - Android getUserRetrievedCity() equivalent
     func getUserRetrievedCity() -> String? {
         return userRetrievedCity
+    }
+    
+    /// Gets user retrieved IP address - Android getUserRetrievedIp() equivalent
+    func getUserRetrievedIp() -> String? {
+        return userRetrievedIp
     }
     
     /// Gets language selected by user - Android getLanguageSelectedUser() equivalent

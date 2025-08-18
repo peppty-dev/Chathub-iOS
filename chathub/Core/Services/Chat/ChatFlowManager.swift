@@ -365,7 +365,7 @@ class ChatFlowManager {
                 // Chat exists, use existing chat ID
                 if let chatId = document.data()?["Chat_id"] as? String {
                     AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "checkOldOrNewChat() DocumentSnapshot data: \(document.data() ?? [:])")
-                    self?.saveAIMessagesToLocalDb(chatId: chatId)
+                    // NOTE: AI messages are now fetched in ProfileView like Android UserProfileActivity
                     self?.setChatId(
                         otherUserId: otherUserId,
                         otherUserName: otherUserName,
@@ -383,7 +383,7 @@ class ChatFlowManager {
                 let unixTime = Int64(Date().timeIntervalSince1970)
                 let chatId = "\(unixTime)\(currentUserId)"
                 AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "checkOldOrNewChat() No such document, creating new chat")
-                self?.saveAIMessagesToLocalDb(chatId: chatId)
+                // NOTE: AI messages are now fetched in ProfileView like Android UserProfileActivity
                 self?.setChatId(
                     otherUserId: otherUserId,
                     otherUserName: otherUserName,
@@ -502,11 +502,18 @@ class ChatFlowManager {
     }
     
     // MARK: - AI Logic (Android Parity)
+    /**
+     * AI takeover check for ChatFlowManager.
+     * 
+     * FIXED: Since ProfileView's shouldAiTakeOver() already validated all conditions
+     * (geo-safety, cooloff times, online/offline logic), and the user was shown the red dot,
+     * ChatFlowManager should trust that validation and enable AI chat immediately.
+     * 
+     * This matches Android architecture where AI chat conversion happens during chat creation
+     * if the conditions were met in the profile view.
+     */
     private func shouldAiTakeOver() -> Bool {
-        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "shouldAiTakeOver()")
-        
-        let timeElapsedSinceLastMessageReceived = Date().timeIntervalSince1970 - sessionManager.lastMessageReceivedTime
-        let maxIdleSeconds = Double(sessionManager.maxIdleSecondsForAiChatEnabling)
+        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "shouldAiTakeOver() checking conditions")
         
         // Check gender-specific AI chat settings (matching Android)
         var aiChatEnabled = false
@@ -516,54 +523,17 @@ class ChatFlowManager {
             aiChatEnabled = sessionManager.aiChatEnabledWoman
         }
         
-        // AI takeover conditions (matching Android logic)
-        let shouldTakeOver = aiChatEnabled && 
-                           timeElapsedSinceLastMessageReceived > maxIdleSeconds &&
-                           maxIdleSeconds > 0
+        // If AI is enabled, we trust that ProfileView already did comprehensive validation
+        // and the user saw the red dot indicator before starting this chat
+        let shouldTakeOver = aiChatEnabled
         
-        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "shouldAiTakeOver() aiChatEnabled: \(aiChatEnabled), timeElapsed: \(timeElapsedSinceLastMessageReceived), maxIdle: \(maxIdleSeconds), shouldTakeOver: \(shouldTakeOver)")
+        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "shouldAiTakeOver() aiChatEnabled: \(aiChatEnabled), shouldTakeOver: \(shouldTakeOver)")
         
         return shouldTakeOver
     }
     
     // MARK: - AI Messages (Android Parity)
-    private func saveAIMessagesToLocalDb(chatId: String) {
-        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "saveAIMessagesToLocalDb() chatId: \(chatId)")
-        
-        // Fetch and save AI messages from Firebase (matching Android fetchAndSaveAIMessages)
-        fetchAndSaveAIMessages(chatId: chatId)
-    }
-    
-    // MARK: - Fetch AI Messages from Firebase (Android Parity)
-    private func fetchAndSaveAIMessages(chatId: String) {
-        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "fetchAndSaveAIMessages() chatId: \(chatId)")
-        
-        db.collection("AIMessages").document("messages").getDocument { [weak self] document, error in
-            if let error = error {
-                AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "fetchAndSaveAIMessages() Error fetching AI messages: \(error.localizedDescription)")
-                return
-            }
-            
-            if let document = document, document.exists,
-               let data = document.data(),
-               let formattedMessages = data["formatted_messages"] as? String {
-                
-                AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "fetchAndSaveAIMessages() Successfully fetched AI messages")
-                
-                // Save to local database (matching Android)
-                AITrainingMessageStore.shared.insert(
-                    messageId: UUID().uuidString,
-                    chatId: chatId,
-                    userName: self?.sessionManager.userName ?? "",
-                    userMessage: "Profile view initiated",
-                    replyName: "AI Assistant",
-                    replyMessage: formattedMessages,
-                    messageTime: Date().timeIntervalSince1970
-                )
-            } else {
-                AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "fetchAndSaveAIMessages() No AI messages found or document doesn't exist")
-            }
-        }
-    }
+    // NOTE: AI messages are now handled in ProfileView like Android UserProfileActivity
+    // This method is kept for compatibility but ProfileView handles the actual Firebase fetching
     
 } 

@@ -236,8 +236,9 @@ struct CustomTabBar: View {
                                 // Tab icon
                                 tabIcon(named: tabIcons[index], size: 28)
                                     .foregroundColor(selectedTab == index ? 
-                                        Color.primary : Color.secondary)
+                                        Color.primary : Color.secondary.opacity(0.5))
                                     .font(.system(size: 28))
+                                    .animation(nil, value: selectedTab)
                                 
                                 // Badge overlay
                                 if index == 1 && chatsBadgeCount > 0 {
@@ -255,7 +256,8 @@ struct CustomTabBar: View {
                             Text(tabTitles[index])
                                 .font(.system(size: 10, weight: .medium))
                                 .foregroundColor(selectedTab == index ? 
-                                    Color.primary : Color.secondary)
+                                    Color.primary : Color.secondary.opacity(0.5))
+                                .animation(nil, value: selectedTab)
                         }
                         .frame(maxWidth: .infinity)
                         .padding(.top, 8)
@@ -272,12 +274,15 @@ struct CustomTabBar: View {
                 ignoresSafeAreaEdges: .bottom
             )
             .offset(y: isTabBarHidden ? 83 : 0) // Hide tab bar by moving it down
-            .animation(.easeInOut(duration: 0.3), value: isTabBarHidden)
             .onReceive(NotificationCenter.default.publisher(for: .hideTabBar)) { _ in
-                isTabBarHidden = true
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    isTabBarHidden = true
+                }
             }
             .onReceive(NotificationCenter.default.publisher(for: .showTabBar)) { _ in
-                isTabBarHidden = false
+                withAnimation(.easeInOut(duration: 0.3)) {
+                    isTabBarHidden = false
+                }
             }
         }
     }

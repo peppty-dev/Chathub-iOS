@@ -189,6 +189,10 @@ struct BadgeView: View {
     let backgroundColor: Color
     let textColor: Color
     
+    // Animation state
+    @State private var animationScale: CGFloat = 1.0
+    @State private var previousCount: Int = 0
+    
     init(count: Int, backgroundColor: Color = Color("red3"), textColor: Color = .white) {
         self.count = count
         self.backgroundColor = backgroundColor
@@ -197,15 +201,38 @@ struct BadgeView: View {
     
     var body: some View {
         if count > 0 {
-            ZStack {
-                Circle()
-                    .fill(backgroundColor)
-                    .frame(width: count > 9 ? 22 : 20, height: count > 9 ? 22 : 20)
-                
-                Text(count > 9 ? "9+" : "\(count)")
-                    .font(.system(size: count > 9 ? 11 : 12, weight: .bold))
-                    .foregroundColor(textColor)
-                    .minimumScaleFactor(0.8)
+            Text("\(count)")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundColor(textColor)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(backgroundColor)
+                .clipShape(Capsule())
+                .scaleEffect(animationScale)
+                .animation(.easeInOut(duration: 0.2), value: animationScale)
+                .onChange(of: count) { oldValue, newValue in
+                    // Trigger pop animation when count increases
+                    if newValue > oldValue && oldValue > 0 {
+                        triggerPopAnimation()
+                    }
+                    previousCount = oldValue
+                }
+                .onAppear {
+                    // Initialize previous count
+                    previousCount = count
+                }
+        }
+    }
+    
+    private func triggerPopAnimation() {
+        // Scale up then back to normal for a "pop" effect
+        withAnimation(.easeOut(duration: 0.15)) {
+            animationScale = 1.3
+        }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            withAnimation(.easeInOut(duration: 0.15)) {
+                animationScale = 1.0
             }
         }
     }

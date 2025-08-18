@@ -387,20 +387,26 @@ class DatabaseCleanupService {
             }
             sqlite3_finalize(dropTableStatement)
             
-            // Recreate table
+            // Recreate table with complete schema matching OnlineUsersDB
             let createTableString = """
             CREATE TABLE OnlineUsers (
-                user_id TEXT PRIMARY KEY NOT NULL,
-                user_name TEXT,
-                user_image TEXT,
-                user_gender TEXT,
-                user_age TEXT,
-                user_country TEXT,
-                user_time INT,
-                user_online_status INT,
-                user_device_id TEXT,
-                user_premium INT,
-                user_type TEXT
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id TEXT UNIQUE NOT NULL,
+                user_name TEXT NOT NULL DEFAULT '',
+                user_image TEXT DEFAULT '',
+                user_gender TEXT DEFAULT '',
+                user_country TEXT DEFAULT '',
+                user_language TEXT DEFAULT '',
+                user_age TEXT DEFAULT '',
+                user_device_id TEXT DEFAULT '',
+                user_device_token TEXT DEFAULT '',
+                user_area TEXT DEFAULT '',
+                user_city TEXT DEFAULT '',
+                user_state TEXT DEFAULT '',
+                user_decent_time INTEGER DEFAULT 0,
+                user_last_time_seen INTEGER DEFAULT 0,
+                isAd INTEGER DEFAULT 0,
+                UNIQUE(user_id) ON CONFLICT REPLACE
             );
             """
             var createTableStatement: OpaquePointer?

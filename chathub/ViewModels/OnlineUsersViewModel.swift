@@ -294,15 +294,95 @@ class OnlineUsersViewModel: ObservableObject {
 
     /// Initial data load - only loads if no data exists, respects 30-minute refresh logic
     /// This is the proper method to call from onAppear - it won't unnecessarily reload data
-    func initialLoadIfNeeded() {
+    /// Returns completion handler to indicate when loading is truly complete
+    func initialLoadIfNeeded(completion: @escaping (Bool) -> Void) {
         AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "initialLoadIfNeeded() - Checking if initial load is needed")
         
         // Only fetch if we have no data at all
         if users.isEmpty {
-            AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "initialLoadIfNeeded() - No data present, calling fetchUsers")
-            fetchUsers()
+            AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "initialLoadIfNeeded() - No data present, calling fetchUsers with completion")
+            fetchUsersWithCompletion { [weak self] success in
+                completion(success && !(self?.users.isEmpty ?? true))
+            }
         } else {
             AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "initialLoadIfNeeded() - Data already present (\(users.count) users), no action needed")
+            completion(true) // Already have data, consider it successful
+        }
+    }
+    
+    /// Legacy method for backward compatibility - calls new completion-based method
+    func initialLoadIfNeeded() {
+        initialLoadIfNeeded { _ in
+            // Legacy callers don't need completion handling
+        }
+    }
+    
+    /// Load users with Android parity logic - only fetch from Firebase when needed
+    /// Returns completion handler to indicate when loading is truly complete
+    /// Matches Android OnlineUserListFragment.getOnlineUsers() logic exactly
+    func fetchUsersWithCompletion(completion: @escaping (Bool) -> Void) {
+        AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsersWithCompletion() - Starting with Android parity logic")
+        
+        // CRITICAL FIX: First check if we have any local data at all
+        // Load from local database to see what we have
+        loadUsersFromLocalDatabase()
+        
+        // CRITICAL FIX: Always force Firebase sync if database is empty, regardless of refresh time
+        // This ensures we get data on first launch or after database corruption
+        let needsFirebaseSync = users.isEmpty || userSessionManager.shouldRefreshOnlineUsersFromFirebase()
+        
+        if needsFirebaseSync {
+            if users.isEmpty {
+                AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsersWithCompletion() - No local data found, forcing Firebase sync for initial load")
+            } else {
+                AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsersWithCompletion() - Refresh time exceeded (30+ minutes), showing loading and triggering Firebase sync")
+            }
+            
+            // ENHANCEMENT: Clear filters during periodic refresh for fresh data
+            if !users.isEmpty {
+                AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsersWithCompletion() - Clearing filters for fresh periodic refresh")
+                let filtersClearedSuccess = userSessionManager.clearAllFilters()
+                if filtersClearedSuccess {
+                    // Reset local filter object to match cleared state
+                    self.filter = OnlineUserFilter()
+                    AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsersWithCompletion() - Filters cleared successfully during periodic refresh")
+                }
+            }
+            
+            // ANDROID PARITY: Only show loading when we actually need to fetch from Firebase
+            isLoading = true
+            
+            // Trigger background Firebase sync (similar to Android OnlineUsersWorker)
+            triggerBackgroundDataSync {
+                DispatchQueue.main.async {
+                    // Update refresh time after successful sync (matching Android)
+                    self.userSessionManager.setOnlineUsersRefreshTime()
+                    
+                    // After sync, reload from the local database to update the UI
+                    AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsersWithCompletion() - Firebase sync complete, reloading from local DB")
+                    self.loadUsersFromLocalDatabase()
+                    
+                    // CRITICAL FIX: Reset loading state after sync is complete
+                    self.isLoading = false
+                    
+                    // DEBUGGING: Log detailed state after reload
+                    AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsersWithCompletion() - After reload: users.count=\(self.users.count), isEmpty=\(self.users.isEmpty)")
+                    
+                    // Call completion handler with success indicator
+                    let success = !self.users.isEmpty
+                    AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsersWithCompletion() - Calling completion with success=\(success)")
+                    completion(success)
+                }
+            }
+        } else {
+            AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "fetchUsersWithCompletion() - Refresh time not exceeded and have local data (\(users.count) users), using cached data only")
+            
+            // CRITICAL FIX: Never show loading when using cached data - this prevents flicker
+            // Local database queries should be instant like other apps
+            self.isLoading = false
+            
+            // Call completion handler immediately since we have cached data
+            completion(!users.isEmpty)
         }
     }
     
@@ -581,12 +661,14 @@ class OnlineUsersViewModel: ObservableObject {
                 
                 if let error = error {
                     AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "triggerBackgroundDataSync() - Firebase error: \(error.localizedDescription)")
+                    AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "triggerBackgroundDataSync() - ERROR DETAILS: \(error)")
                     completion?()
                     return
                 }
                 
                 guard let documents = snapshot?.documents else {
                     AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "triggerBackgroundDataSync() - No documents received from Firebase")
+                    AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "triggerBackgroundDataSync() - Snapshot is nil: \(snapshot == nil)")
                     completion?()
                     return
                 }
@@ -595,6 +677,11 @@ class OnlineUsersViewModel: ObservableObject {
                 
                 let currentUserId = userSessionManager.userId
                 AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "triggerBackgroundDataSync() - Current user ID: \(currentUserId ?? "nil")")
+                
+                // CRITICAL CHECK: If we don't have a userId, that might explain why we're not getting data
+                if currentUserId == nil || currentUserId?.isEmpty == true {
+                    AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "triggerBackgroundDataSync() - WARNING: No current user ID available - this might prevent data loading")
+                }
                 
                 var insertedCount = 0
                 var skippedCount = 0
@@ -617,6 +704,8 @@ class OnlineUsersViewModel: ObservableObject {
                     
                     if !name.isEmpty && id != currentUserId {
                         // Use new Android-compatible insert method
+                        AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "triggerBackgroundDataSync() - About to insert user: name='\(name)', id='\(id)', gender='\(gender)', country='\(country)'")
+                        
                         self.onlineUsersDB.insert(
                             user_id: id,
                             user_name: name,
@@ -634,23 +723,28 @@ class OnlineUsersViewModel: ObservableObject {
                             user_last_time_seen: Int64(lastTimeSeen.timeIntervalSince1970),
                             isAd: false
                         )
+                        
                         insertedCount += 1
                         AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "triggerBackgroundDataSync() - Inserted user: \(name)")
                     } else {
                         skippedCount += 1
                         let reason = name.isEmpty ? "empty name" : "same as current user"
-                        AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "triggerBackgroundDataSync() - Skipped user: \(name), reason: \(reason)")
+                        AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "triggerBackgroundDataSync() - Skipped user: \(name), reason: \(reason), currentUserId: \(currentUserId ?? "nil")")
                     }
                 }
                 
                 AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "triggerBackgroundDataSync() - Sync complete. Inserted: \(insertedCount), Skipped: \(skippedCount)")
                 
-                // Verify database state after sync
-                let finalUserCount = self.onlineUsersDB.query().count
-                AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "triggerBackgroundDataSync() - Final database count: \(finalUserCount)")
-                
-                // Call completion handler now that sync is done
-                completion?()
+                // CRITICAL FIX: Wait a moment for async database inserts to complete before calling completion
+                // The database insert operations are async, so we need to give them time to finish
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    // Verify database state after sync
+                    let finalUserCount = self.onlineUsersDB.query().count
+                    AppLogger.log(tag: "LOG-APP: OnlineUsersViewModel", message: "triggerBackgroundDataSync() - Final database count after delay: \(finalUserCount)")
+                    
+                    // Call completion handler now that sync is done and database is updated
+                    completion?()
+                }
             }
         }
     }

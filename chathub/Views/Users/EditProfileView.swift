@@ -87,9 +87,9 @@ struct EditProfileView: View {
     // Navigation states
     @State private var showCreateAccount: Bool = false
 
-    // Interests local state (local-first UI)
-    @State private var acceptedInterests: [String] = []
-    @State private var suggestedInterests: [String] = []
+    // Interests local state - using SimplifiedInterestManager as single source of truth
+    @State private var currentInterests: [String] = []
+    @State private var localSelectedInterests: Set<String> = []
     
     var body: some View {
         VStack(spacing: 0) {
@@ -180,40 +180,43 @@ struct EditProfileView: View {
                     .padding(.horizontal, 20)
                     .padding(.bottom, 24)
 
-                    // Live Interests Section (accepted + suggested)
+                    // Interests Section - SimplifiedInterestManager (max 5 items)
                     VStack(alignment: .leading, spacing: 16) {
                         SectionHeader(
                             icon: "star.circle.fill",
                             title: "Interests",
-                            subtitle: "Accepted and suggested interests from your chats"
+                            subtitle: "Your interests collected from chats (max 5)"
                         )
 
-                        // Unified list: show both suggested and accepted; pills toggle selection but remain visible
-                        let pillSpacing: CGFloat = 8
-                        let allTags: [String] = {
-                            var list: [String] = []
-                            for t in (suggestedInterests + acceptedInterests) {
-                                if !list.contains(where: { $0.caseInsensitiveCompare(t) == .orderedSame }) {
-                                    list.append(t)
-                                }
-                            }
-                            return list
-                        }()
-                        if #available(iOS 16.0, *) {
+                        // Show current interests from SimplifiedInterestManager - user can toggle selection
+                        if currentInterests.isEmpty {
+                            Text("No interests detected yet. Chat with people to discover your interests!")
+                                .font(.system(size: 14))
+                                .foregroundColor(Color("shade_600"))
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 16)
+                                .background(Color("shade_100"))
+                                .cornerRadius(12)
+                        } else {
+                            let pillSpacing: CGFloat = 8
+                            let allTags = currentInterests
+                            
+                            if #available(iOS 16.0, *) {
                             FlowLayout(spacing: pillSpacing) {
                                 ForEach(allTags, id: \.self) { tag in
-                                    let isSelected = acceptedInterests.contains { $0.caseInsensitiveCompare(tag) == .orderedSame }
+                                    let isSelected = localSelectedInterests.contains(tag)
                                     TogglePill(title: tag, isSelected: isSelected) {
-                                        if isSelected { removeInterest(tag) } else { acceptInterest(tag) }
+                                        toggleInterestSelection(tag)
                                     }
                                 }
                             }
-                        } else {
-                            VStack(alignment: .leading, spacing: pillSpacing) {
-                                ForEach(allTags, id: \.self) { tag in
-                                    let isSelected = acceptedInterests.contains { $0.caseInsensitiveCompare(tag) == .orderedSame }
-                                    TogglePill(title: tag, isSelected: isSelected) {
-                                        if isSelected { removeInterest(tag) } else { acceptInterest(tag) }
+                            } else {
+                                VStack(alignment: .leading, spacing: pillSpacing) {
+                                    ForEach(allTags, id: \.self) { tag in
+                                        let isSelected = localSelectedInterests.contains(tag)
+                                        TogglePill(title: tag, isSelected: isSelected) {
+                                            toggleInterestSelection(tag)
+                                        }
                                     }
                                 }
                             }
@@ -304,9 +307,9 @@ struct EditProfileView: View {
         .background(Color("Background Color"))
         .onAppear {
             loadUserData()
-            // Initialize interests local state (local-first)
-            acceptedInterests = SessionManager.shared.interestTags
-            suggestedInterests = InterestSuggestionManager.shared.getSuggestedInterests()
+            // Initialize interests from SimplifiedInterestManager (single source of truth)
+            currentInterests = SimplifiedInterestManager.shared.getCurrentInterests()
+            localSelectedInterests = Set(currentInterests) // Initially all are selected
         }
         .alert("Error", isPresented: .constant(errorMessage != nil)) {
             Button("OK") { errorMessage = nil }
@@ -689,6 +692,9 @@ struct EditProfileView: View {
         // Update last modified timestamp
         updateData["profile_updated_at"] = FieldValue.serverTimestamp()
         
+        // Save interests to SimplifiedInterestManager and sync to SessionManager
+        saveInterestsChanges()
+        
         db.collection("Users").document(userId).setData(updateData, merge: true) { error in
             isLoading = false
             
@@ -702,29 +708,28 @@ struct EditProfileView: View {
         }
     }
 
-    // MARK: - Interest actions (local-first + sync via manager)
-    private func acceptInterest(_ tag: String) {
-        // Optimistic local update
-        if !acceptedInterests.contains(where: { $0.caseInsensitiveCompare(tag) == .orderedSame }) {
-            acceptedInterests.append(tag)
-        }
-        // Keep suggestion visible; do not remove from suggestions
-        InterestSuggestionManager.shared.acceptInterest(tag, chatId: "") { success in
-            if success {
-                // Sync local mirror as well
-                self.acceptedInterests = SessionManager.shared.interestTags
-            }
+    // MARK: - Interest actions (local toggle state for editing)
+    private func toggleInterestSelection(_ tag: String) {
+        if localSelectedInterests.contains(tag) {
+            localSelectedInterests.remove(tag)
+        } else {
+            localSelectedInterests.insert(tag)
         }
     }
-
-    private func removeInterest(_ tag: String) {
-        // Optimistic local update
-        acceptedInterests.removeAll { $0.caseInsensitiveCompare(tag) == .orderedSame }
-        InterestSuggestionManager.shared.removeInterest(tag) { success in
-            if success {
-                self.acceptedInterests = SessionManager.shared.interestTags
-            }
+    
+    private func saveInterestsChanges() {
+        // Remove unselected interests from SimplifiedInterestManager
+        let interestsToRemove = currentInterests.filter { !localSelectedInterests.contains($0) }
+        
+        for interest in interestsToRemove {
+            SimplifiedInterestManager.shared.removeInterest(interest)
+            AppLogger.log(tag: "EditProfile", message: "Removed unselected interest: '\(interest)'")
         }
+        
+        // Update our local list to reflect the changes
+        currentInterests = Array(localSelectedInterests)
+        
+        AppLogger.log(tag: "EditProfile", message: "Saved interests: \(currentInterests)")
     }
 }
 

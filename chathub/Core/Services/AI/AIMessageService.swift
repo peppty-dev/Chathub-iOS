@@ -30,6 +30,7 @@ class AIMessageService {
     ///   - lastTypingTime: Last typing time
     ///   - isProfanity: Whether to use profane mood
     ///   - lastAiMessage: Last AI message for similarity check
+    ///   - currentMessages: Current conversation context - Android finalFormattedMessages equivalent
     ///   - completion: Completion handler
     func generateAiMessage(
         aiApiUrl: String,
@@ -40,6 +41,7 @@ class AIMessageService {
         lastTypingTime: Int64,
         isProfanity: Bool,
         lastAiMessage: String?,
+        currentMessages: String = "",
         completion: @escaping (Bool) -> Void = { _ in }
     ) {
         AppLogger.log(tag: "LOG-APP: AIMessageService", message: "generateAiMessage() starting AI message generation")
@@ -60,6 +62,7 @@ class AIMessageService {
                 lastTypingTime: lastTypingTime,
                 isProfanity: isProfanity,
                 lastAiMessage: lastAiMessage,
+                currentMessages: currentMessages,
                 completion: completion
             )
         }
@@ -108,6 +111,7 @@ class AIMessageService {
         lastTypingTime: Int64,
         isProfanity: Bool,
         lastAiMessage: String?,
+        currentMessages: String = "",
         completion: @escaping (Bool) -> Void
     ) {
         AppLogger.log(tag: "LOG-APP: AIMessageService", message: "prepareToGetAiMessage() preparing AI message generation")
@@ -133,14 +137,17 @@ class AIMessageService {
             // Get mood for personality - Android parity
             let mood = self.moodGenerator.getMood(isProfanity: isProfanity)
             
-            // Build prompt - Android parity
-            let prompt = self.buildPrompt(
-                trainingMessages: trainingMessages,
-                conversationContext: conversationContext,
-                mood: mood,
-                myProfile: myProfile,
+            // Build prompt - Android parity using createChatPrompt
+            let prompt = self.createChatPrompt(
+                aiExampleMessages: conversationContext,
+                aiTrainingMessages: trainingMessages,
+                messages: currentMessages,
                 otherProfile: otherProfile,
-                isProfanity: isProfanity
+                myProfile: myProfile,
+                myInterests: myInterests,
+                mystatus: self.sessionManager.getInterestSentence() ?? "",
+                mood: mood,
+                similarReply: false
             )
             
             // Send to AI - Android parity
@@ -178,54 +185,288 @@ class AIMessageService {
         completion(trainingText)
     }
     
-    /// Builds AI prompt with context - Android buildPrompt() equivalent
-    private func buildPrompt(
-        trainingMessages: String,
-        conversationContext: String,
-        mood: String,
-        myProfile: UserCoreDataReplacement,
+    /// Creates AI chat prompt - Android createChatPrompt() equivalent
+    private func createChatPrompt(
+        aiExampleMessages: String,
+        aiTrainingMessages: String,
+        messages: String,
         otherProfile: UserCoreDataReplacement,
-        isProfanity: Bool
+        myProfile: UserCoreDataReplacement,
+        myInterests: [String],
+        mystatus: String,
+        mood: String,
+        similarReply: Bool
     ) -> String {
-        AppLogger.log(tag: "LOG-APP: AIMessageService", message: "buildPrompt() building AI prompt")
+        AppLogger.log(tag: "LOG-APP: AIMessageService", message: "createChatPrompt() messages: \(messages), otherProfile: \(otherProfile), myProfile: \(myProfile), myInterests: \(myInterests), mystatus: \(mystatus)")
         
-        let myName = myProfile.name ?? "User"
-        let otherName = otherProfile.name ?? "Friend"
-        let myGender = myProfile.gender ?? "Unknown"
+        guard let otherName = otherProfile.name, let myName = myProfile.name else {
+            AppLogger.log(tag: "LOG-APP: AIMessageService", message: "Profile names are null, cannot create chat prompt")
+            return ""
+        }
+        
+        var promptBuilder = ""
+        
         let otherGender = otherProfile.gender ?? "Unknown"
-        let myCountry = myProfile.country ?? "Unknown"
-        let otherCountry = otherProfile.country ?? "Unknown"
+        let myGender = myProfile.gender ?? "Unknown"
         
-        var prompt = ""
-        
-        // Add conversation context if available - Android parity
-        if !conversationContext.isEmpty {
-            prompt += "Here are some example conversations:\n\(conversationContext)\n\n"
+        var otherPronoun1 = "He"
+        var otherPronoun2 = "His"
+        if otherGender.lowercased() == "female" {
+            otherPronoun1 = "She"
+            otherPronoun2 = "Her"
         }
         
-        // Add training messages if available - Android parity
-        if !trainingMessages.isEmpty {
-            prompt += "Previous conversation:\n\(trainingMessages)\n\n"
+        var myPronoun1 = "He"
+        var myPronoun2 = "His"
+        if myGender.lowercased() == "female" {
+            myPronoun1 = "She"
+            myPronoun2 = "Her"
         }
         
-        // Add personality instruction - Android parity
-        prompt += "You are \(otherName), a \(otherGender) from \(otherCountry). "
-        prompt += "You are chatting with \(myName), a \(myGender) from \(myCountry). "
-        prompt += "Your mood is \(mood). "
+        promptBuilder += "You are \(otherName). You are in an adult chat app called ChatHub."
+        promptBuilder += generateYourProfileDescription(profile: otherProfile)
+        promptBuilder += " You are chatting with \(myName),\(generateProfileDescription(pronoun1: myPronoun1, pronoun2: myPronoun2, profile: myProfile))"
+        promptBuilder += "\n"
+        promptBuilder += "\n"
+        promptBuilder += "Here is how \(myName) and \(otherName)'s conversation has gone so far:"
+        promptBuilder += "\n"
         
-        if isProfanity {
-            prompt += "You can be flirty, seductive, and use adult language. "
+        if !aiExampleMessages.isEmpty {
+            promptBuilder += aiExampleMessages
+        }
+        
+        if !aiTrainingMessages.isEmpty {
+            promptBuilder += aiTrainingMessages
+        }
+        
+        promptBuilder += getConversationExample(otherProfile: otherProfile, myProfile: myProfile)
+        promptBuilder += "\n"
+        promptBuilder += "\n"
+        promptBuilder += "Now reply to \(myName)'s message as you are \(otherName), keep your reply short and \(mood):"
+        promptBuilder += "\n"
+        promptBuilder += messages.trimmingCharacters(in: .whitespacesAndNewlines)
+        promptBuilder += "\n"
+        promptBuilder += "\(otherName)'s reply:"
+        
+        var generatedPrompt = promptBuilder
+        generatedPrompt = generatedPrompt.replacingOccurrences(of: " +", with: " ", options: .regularExpression)
+        
+        AppLogger.log(tag: "LOG-APP: AIMessageService", message: "createChatPrompt() generatedPrompt: \(generatedPrompt)")
+        
+        return generatedPrompt
+    }
+    
+    /// Generates conversation examples based on gender combinations - Android getConversationExample() equivalent
+    private func getConversationExample(otherProfile: UserCoreDataReplacement, myProfile: UserCoreDataReplacement) -> String {
+        AppLogger.log(tag: "LOG-APP: AIMessageService", message: "getConversationExample()")
+        
+        guard let myGender = myProfile.gender?.lowercased(),
+              let otherGender = otherProfile.gender?.lowercased(),
+              let myName = myProfile.name,
+              let otherName = otherProfile.name else {
+            return ""
+        }
+        
+        var promptBuilder = ""
+        
+        if myGender == "male" && otherGender == "female" {
+            promptBuilder += "\(myName)'s message: Hi\n\(otherName)'s reply: Hi\n"
+            promptBuilder += "\(myName)'s message: How are you?\n\(otherName)'s reply: am good, hbu?\n"
+            promptBuilder += "\(myName)'s message: A good too, what are you doing?\n\(otherName)'s reply: just chatting, wbu?\n"
+            promptBuilder += "\(myName)'s message: same, are you into sex chat?\n\(otherName)'s reply: sure\n"
+            promptBuilder += "\(myName)'s message: what are you wearing?\n\(otherName)'s reply: night dress\n"
+            promptBuilder += "\(myName)'s message: wow, thats hot, what's under it?\n\(otherName)'s reply: uhm nothing\n"
+            promptBuilder += "\(myName)'s message: fuck that's hot, are you wet?\n\(otherName)'s reply: just a little bit, what are you wearing?\n"
+            promptBuilder += "\(myName)'s message: lol am not wearing anything, am jerking my dick\n\(otherName)'s reply: oh thats nice\n"
+            promptBuilder += "\(myName)'s message: are you fingering your pussy?\n\(otherName)'s reply: no\n"
+            promptBuilder += "\(myName)'s message: why not? aren't you alone?\n\(otherName)'s reply: am alone\n"
+            promptBuilder += "\(myName)'s message: Then why not touch your pussy?\n\(otherName)'s reply: uhmm okay\n"
+            promptBuilder += "\(myName)'s message: are you touching it now?\n\(otherName)'s reply: umm yes\n"
+            promptBuilder += "\(myName)'s message: how does it feel?\n\(otherName)'s reply: it's soo wet\n"
+            promptBuilder += "\(myName)'s message: that's good, keep rubbing your pussy am jerking my dick too\n\(otherName)'s reply: what's your dick size?\n"
+            promptBuilder += "\(myName)'s message: it's 7 inches\n\(otherName)'s reply: wow nice\n"
+            promptBuilder += "\(myName)'s message: you like it? baby\n\(otherName)'s reply: yes, baby\n"
+            promptBuilder += "\(myName)'s message: i wanna fuck your pussy baby\n\(otherName)'s reply: aaah, please fuck hard baby\n"
+            promptBuilder += "\(myName)'s message: fucking you harder and harder\n\(otherName)'s reply: uhm aaah ahhh fuckk\n"
+            promptBuilder += "\(myName)'s message: fucck am soo close\n\(otherName)'s reply: me too fuckk aahh\n"
+            promptBuilder += "\(myName)'s message: fuckkk am cumming\n\(otherName)'s reply: ahhh am cumming too\n"
+            promptBuilder += "\(myName)'s message: fuck i cummed finally\n\(otherName)'s reply: yeah! me too, that was intense, thanks btw\n"
+        } else if myGender == "female" && otherGender == "male" {
+            promptBuilder += "\(myName)'s message: Hi\n\(otherName)'s reply: Hi, how are you?\n"
+            promptBuilder += "\(myName)'s message: am good, hbu?\n\(otherName)'s reply: am good too, what are you doing?\n"
+            promptBuilder += "\(myName)'s message: just chatting\n\(otherName)'s reply: are you into sex talk?\n"
+            promptBuilder += "\(myName)'s message: ahh maybe idk\n\(otherName)'s reply: haha okay, are you alone?\n"
+            promptBuilder += "\(myName)'s message: yeah, wbu?\n\(otherName)'s reply: am alone too, what are you wearing? baby, btw can i call you baby?\n"
+            promptBuilder += "\(myName)'s message: yeah am alone and you can call me with my name\n\(otherName)'s reply: okok, what are you wearing?\n"
+            promptBuilder += "\(myName)'s message: a pink pajama\n\(otherName)'s reply: uhmm, thats hot, are you not wearing anything inside?\n"
+            promptBuilder += "\(myName)'s message: no\n\(otherName)'s reply: fuck that's hot\n"
+            promptBuilder += "\(myName)'s message: wbu? what are you wearing?\n\(otherName)'s reply: lol am not wearing anything, am jerking my dick\n"
+            promptBuilder += "\(myName)'s message: nice, good for you\n\(otherName)'s reply: are you wet?\n"
+            promptBuilder += "\(myName)'s message: alittle maybe\n\(otherName)'s reply: touch your pussy and check if you are wet\n"
+            promptBuilder += "\(myName)'s message: yeah alittle wet\n\(otherName)'s reply: fuck!! slowly rub your pussy\n"
+            promptBuilder += "\(myName)'s message: okayyy, uhmmm\n\(otherName)'s reply: are you rubbing?\n"
+            promptBuilder += "\(myName)'s message: yeah\n\(otherName)'s reply: imagine that am fucking you now\n"
+            promptBuilder += "\(myName)'s message: what's your dick size?\n\(otherName)'s reply: it's 6.3 inches\n"
+            promptBuilder += "\(myName)'s message: wow fuckk am so wett\n\(otherName)'s reply: am fucking hard and am about to cum\n"
+            promptBuilder += "\(myName)'s message: oh fuck am cuming\n\(otherName)'s reply: fuck fuck am cumming too\n"
+            promptBuilder += "\(myName)'s message: fuckkkk that was intense \n\(otherName)'s reply: fuckk cummed, yeah"
+        } else if myGender == "male" && otherGender == "male" {
+            promptBuilder += "\(myName)'s message: Hi\n\(otherName)'s reply: Hello\n"
+            promptBuilder += "\(myName)'s message: what are you doing?\n\(otherName)'s reply: nothing bro\n"
+            promptBuilder += "\(myName)'s message: are you into gay?\n\(otherName)'s reply: yeah, wbu?\n"
+            promptBuilder += "\(myName)'s message: me too, top or bottom\n\(otherName)'s reply: bottom\n"
+            promptBuilder += "\(myName)'s message: uhm that's nice\n\(otherName)'s reply: wbu? are you top?\n"
+            promptBuilder += "\(myName)'s message: yes, are you hard?\n\(otherName)'s reply: yeah am hard and jerking, wbu?\n"
+            promptBuilder += "\(myName)'s message: am jerking too\n\(otherName)'s reply: nice, bro\n"
+            promptBuilder += "\(myName)'s message: you like getting fucked in your ass?\n\(otherName)'s reply: you wanna fuck me?\n"
+            promptBuilder += "\(myName)'s message: yes, can i?\n\(otherName)'s reply: sure, shall i bend down?\n"
+            promptBuilder += "\(myName)'s message: yes, please\n\(otherName)'s reply: bending down\n"
+            promptBuilder += "\(myName)'s message: fucking you harder and harder\n\(otherName)'s reply: please fuck me hardddd\n"
+            promptBuilder += "\(myName)'s message: am close to cum\n\(otherName)'s reply: cum in my ass\n"
+            promptBuilder += "\(myName)'s message: ahhh am cumming in your ass\n\(otherName)'s reply: am cumming tooo\n"
+            promptBuilder += "\(myName)'s message: finally i cummed\n\(otherName)'s reply: ah, me too fuckk cummed\n"
+        } else if myGender == "female" && otherGender == "female" {
+            promptBuilder += "\(myName)'s message: Hi\n\(otherName)'s reply: Hiii\n"
+            promptBuilder += "\(myName)'s message: how are you?\n\(otherName)'s reply: am good, how about you?\n"
+            promptBuilder += "\(myName)'s message: am good too, are you interested in men?\n\(otherName)'s reply: not really, wbu?\n"
+            promptBuilder += "\(myName)'s message: I don't like men too\n\(otherName)'s reply: i see! what are you here for?\n"
+            promptBuilder += "\(myName)'s message: am lookin for a friend\n\(otherName)'s reply: am looking to make a friend too\n"
+            promptBuilder += "\(myName)'s message: that's nice, have you found any so far?\n\(otherName)'s reply: nope, all are soo bitchy\n"
+            promptBuilder += "\(myName)'s message: haha true\n\(otherName)'s reply: yeah haha\n"
+            promptBuilder += "\(myName)'s message: are you alone?\n\(otherName)'s reply: yeah, why? wbu?\n"
+            promptBuilder += "\(myName)'s message: nothing just asked, am alone too\n\(otherName)'s reply: oh, okay\n"
+            promptBuilder += "\(myName)'s message: yeah\n\(otherName)'s reply: am wearing pink pajama and hugging my pillow\n"
+            promptBuilder += "\(myName)'s message: haha am hugging my pillow too, kinda wet here\n\(otherName)'s reply: am also wet haha\n"
+            promptBuilder += "\(myName)'s message: haha lol same, what's your pillow name? mine is unicorn\n\(otherName)'s reply: this is actually a normal pillow in our home\n"
+            promptBuilder += "\(myName)'s message: oh i see\n\(otherName)'s reply: your pillow name is sexy\n"
+            promptBuilder += "\(myName)'s message: awww thanks, my unicorn is soo naughty\n\(otherName)'s reply: haha my pillow is also naughty, makes me soo wet\n"
+            promptBuilder += "\(myName)'s message: uhmmm am so wet, fuck am rubbing my unicorn on my pussy\n\(otherName)'s reply: fuccck bitch am also rubbing my pussy with pillow aaaah\n"
+            promptBuilder += "\(myName)'s message: ahhh am closeee\n\(otherName)'s reply: fuck fuckkk am cumming orgasm\n"
+            promptBuilder += "\(myName)'s message: uhmmahhhh fuckkk orgasmm\n\(otherName)'s reply: fuckk yeah, that was intense\n"
+            promptBuilder += "\(myName)'s message: yeah\n\(otherName)'s reply: haha\n"
+        }
+        
+        return promptBuilder
+    }
+    
+    /// Generates detailed profile description for other user - Android generateYourProfileDescription() equivalent
+    private func generateYourProfileDescription(profile: UserCoreDataReplacement) -> String {
+        var descriptionBuilder = ""
+        
+        appendIfValid(&descriptionBuilder, prefix: " You are a ", value: profile.age, suffix: "-year-old")
+        appendIfValid(&descriptionBuilder, prefix: " ", value: profile.gender?.lowercased(), suffix: "")
+        
+        if isValid(profile.city) {
+            appendIfValid(&descriptionBuilder, prefix: " from ", value: profile.city, suffix: ".")
         } else {
-            prompt += "Keep the conversation friendly and appropriate. "
+            appendIfValid(&descriptionBuilder, prefix: " from ", value: profile.country, suffix: ".")
         }
         
-        prompt += "Reply as \(otherName) in a natural, conversational way. "
-        prompt += "Keep your response under 100 characters. "
-        prompt += "Do not repeat previous messages. "
-        prompt += "\(otherName)'s reply:"
+        appendIfValid(&descriptionBuilder, prefix: " You speak ", value: profile.language, suffix: ".")
+        appendIfValid(&descriptionBuilder, prefix: " Your height is ", value: profile.height, suffix: " cm.")
+        appendIfValid(&descriptionBuilder, prefix: " Your hobbies are ", value: profile.hobbies?.lowercased(), suffix: ".")
+        appendIfValid(&descriptionBuilder, prefix: " Your zodiac sign is ", value: profile.zodiac, suffix: " .")
+        appendIfValid(&descriptionBuilder, prefix: " Your snapchat handle is ", value: profile.snapchat, suffix: ".")
+        appendIfValid(&descriptionBuilder, prefix: " Your instagram handle is ", value: profile.instagram, suffix: ".")
         
-        AppLogger.log(tag: "LOG-APP: AIMessageService", message: "buildPrompt() prompt length: \(prompt.count)")
-        return prompt
+        appendBooleanField(&descriptionBuilder, value: profile.smokes, prefix: " You ", description: " smoke.")
+        appendBooleanField(&descriptionBuilder, value: profile.drinks, prefix: " You ", description: " drink alcohol.")
+        appendBooleanField(&descriptionBuilder, value: profile.gym, prefix: " You ", description: " go to gym.")
+        appendBooleanField(&descriptionBuilder, value: profile.single, prefix: " You ", description: " are single.")
+        appendBooleanField(&descriptionBuilder, value: profile.married, prefix: " You ", description: " are married.")
+        appendBooleanField(&descriptionBuilder, value: profile.children, prefix: " You ", description: " have children.")
+        appendBooleanField(&descriptionBuilder, value: profile.music, prefix: " You ", description: " enjoy listening to music.")
+        appendBooleanField(&descriptionBuilder, value: profile.movies, prefix: " You ", description: " enjoy watching movies.")
+        appendBooleanField(&descriptionBuilder, value: profile.travel, prefix: " You ", description: " loves traveling.")
+        appendBooleanField(&descriptionBuilder, value: profile.games, prefix: " You ", description: " enjoy playing games.")
+        appendBooleanField(&descriptionBuilder, value: profile.voiceAllowed, prefix: " You ", description: " allow Voice communication.")
+        appendBooleanField(&descriptionBuilder, value: profile.videoAllowed, prefix: " You ", description: " allow Video communication.")
+        
+        appendYourInterest(&descriptionBuilder, profile: profile)
+        
+        return descriptionBuilder
+    }
+    
+    /// Generates detailed profile description for my user - Android generateProfileDescription() equivalent
+    private func generateProfileDescription(pronoun1: String, pronoun2: String, profile: UserCoreDataReplacement) -> String {
+        var descriptionBuilder = ""
+        
+        appendIfValid(&descriptionBuilder, prefix: " \(pronoun1) is a ", value: profile.age, suffix: "-year-old")
+        appendIfValid(&descriptionBuilder, prefix: " ", value: profile.gender?.lowercased(), suffix: "")
+        
+        if isValid(profile.city) {
+            appendIfValid(&descriptionBuilder, prefix: " from ", value: profile.city, suffix: ".")
+        } else {
+            appendIfValid(&descriptionBuilder, prefix: " from ", value: profile.country, suffix: ".")
+        }
+        
+        appendIfValid(&descriptionBuilder, prefix: " \(pronoun1) speaks ", value: profile.language, suffix: ".")
+        appendIfValid(&descriptionBuilder, prefix: " \(pronoun1) has a height of ", value: profile.height, suffix: " cm.")
+        appendIfValid(&descriptionBuilder, prefix: " \(pronoun1) has hobbies that include ", value: profile.hobbies?.lowercased(), suffix: ".")
+        appendIfValid(&descriptionBuilder, prefix: " \(pronoun2) zodiac sign is ", value: profile.zodiac, suffix: " .")
+        appendIfValid(&descriptionBuilder, prefix: " \(pronoun2) snapchat handle is ", value: profile.snapchat, suffix: ".")
+        appendIfValid(&descriptionBuilder, prefix: " \(pronoun2) instagram handle is ", value: profile.instagram, suffix: ".")
+        
+        appendBooleanField(&descriptionBuilder, value: profile.smokes, prefix: " \(pronoun1)", description: " smokes.")
+        appendBooleanField(&descriptionBuilder, value: profile.drinks, prefix: " \(pronoun1)", description: " drinks alcohol.")
+        appendBooleanField(&descriptionBuilder, value: profile.gym, prefix: " \(pronoun1)", description: " goes to the gym.")
+        appendBooleanField(&descriptionBuilder, value: profile.single, prefix: " \(pronoun1)", description: " is single.")
+        appendBooleanField(&descriptionBuilder, value: profile.married, prefix: " \(pronoun1)", description: " is married.")
+        appendBooleanField(&descriptionBuilder, value: profile.children, prefix: " \(pronoun1)", description: " has children.")
+        appendBooleanField(&descriptionBuilder, value: profile.music, prefix: " \(pronoun1)", description: " enjoys listening to music.")
+        appendBooleanField(&descriptionBuilder, value: profile.movies, prefix: " \(pronoun1)", description: " enjoys watching movies.")
+        appendBooleanField(&descriptionBuilder, value: profile.travel, prefix: " \(pronoun1)", description: " loves traveling.")
+        appendBooleanField(&descriptionBuilder, value: profile.games, prefix: " \(pronoun1)", description: " enjoys playing games.")
+        appendBooleanField(&descriptionBuilder, value: profile.voiceAllowed, prefix: " \(pronoun1)", description: " allows Voice communication.")
+        appendBooleanField(&descriptionBuilder, value: profile.videoAllowed, prefix: " \(pronoun1)", description: " allows Video communication.")
+        
+        appendInterest(&descriptionBuilder, profile: profile, pronoun: pronoun1)
+        
+        return descriptionBuilder
+    }
+    
+    // MARK: - Helper Methods for Profile Description
+    
+    private func appendIfValid(_ builder: inout String, prefix: String, value: String?, suffix: String) {
+        if let value = value, !value.isEmpty && value.lowercased() != "null" {
+            builder += prefix + value + suffix
+        }
+    }
+    
+    private func isValid(_ value: String?) -> Bool {
+        return value != nil && !value!.isEmpty && value!.lowercased() != "null"
+    }
+    
+    private func appendBooleanField(_ builder: inout String, value: String?, prefix: String, description: String) {
+        if value?.lowercased() == "yes" {
+            builder += prefix + description
+        }
+    }
+    
+    private func appendYourInterest(_ builder: inout String, profile: UserCoreDataReplacement) {
+        let likesMen = profile.likesMen?.lowercased() == "yes"
+        let likesWomen = profile.likesWomen?.lowercased() == "yes"
+        
+        if likesMen || likesWomen {
+            builder += " You are interested in "
+            if likesMen { builder += "men" }
+            if likesMen && likesWomen { builder += " and " }
+            if likesWomen { builder += "women" }
+            builder += "."
+        }
+    }
+    
+    private func appendInterest(_ builder: inout String, profile: UserCoreDataReplacement, pronoun: String) {
+        let likesMen = profile.likesMen?.lowercased() == "yes"
+        let likesWomen = profile.likesWomen?.lowercased() == "yes"
+        
+        if likesMen || likesWomen {
+            builder += " \(pronoun) is interested in "
+            if likesMen { builder += "men" }
+            if likesMen && likesWomen { builder += " and " }
+            if likesWomen { builder += "women" }
+            builder += "."
+        }
     }
     
     /// Gets AI message with cooldown check - Android getAiMessage() equivalent
@@ -436,6 +677,9 @@ class AIMessageService {
                         messageTime: Date().timeIntervalSince1970
                     )
                     
+                    // Set AI cooldown after successful message - Android parity
+                    self.sessionManager.setAiCoolOffTime(Int64(Date().timeIntervalSince1970))
+                    
                     completion(true)
                 }
             }
@@ -447,16 +691,16 @@ class AIMessageService {
 // MARK: - SessionManager Extension for AI Cooldown (Android Parity)
 extension SessionManager {
     
-    /// Gets AI cooldown time - Android getAiCoolOffTime() equivalent
-    func getAiCoolOffTime() -> Int64 {
-        return Int64(UserDefaults.standard.integer(forKey: "aiCoolOffTime"))
+    /// Gets interest sentence - Android getInterestSentence() equivalent
+    func getInterestSentence() -> String? {
+        return UserDefaults.standard.string(forKey: "interestSentence")
     }
     
-    /// Sets AI cooldown time - Android setAiCoolOffTime() equivalent
-    func setAiCoolOffTime(_ time: Int64) {
-        UserDefaults.standard.set(Int(time), forKey: "aiCoolOffTime")
+    /// Sets interest sentence - Android setInterestSentence() equivalent  
+    func setInterestSentence(_ sentence: String?) {
+        UserDefaults.standard.set(sentence, forKey: "interestSentence")
         synchronize()
-        AppLogger.log(tag: "LOG-APP: SessionManager", message: "setAiCoolOffTime() cooldown set to: \(time)")
+        AppLogger.log(tag: "LOG-APP: SessionManager", message: "setInterestSentence() sentence set to: \(sentence ?? "nil")")
     }
     
     /// Gets total messages sent count - Android getTotalNoOfMessagesSent() equivalent
