@@ -85,42 +85,59 @@ class AppNotificationPermissionService: NSObject {
     ) {
         AppLogger.log(tag: "LOG-APP: NotificationPermissionService", message: "requestNotificationPermissionWithContext() context: \(context)")
         
-        guard shouldRequestPermission() else {
-            AppLogger.log(tag: "LOG-APP: NotificationPermissionService", message: "requestNotificationPermissionWithContext() Permission already requested, skipping")
-            onComplete(false)
-            return
-        }
-        
-        // Mark as requested to prevent multiple requests
-        hasRequestedPermission = true
-        UserDefaults.standard.set(true, forKey: permissionRequestedKey)
-        
-        // Log context for analytics
-        UserDefaults.standard.set(context, forKey: "notification_permission_context")
-        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "notification_permission_request_time")
-        
-        let authOptions: UNAuthorizationOptions = [.alert, .badge, .sound]
-        UNUserNotificationCenter.current().requestAuthorization(
-            options: authOptions
-        ) { granted, error in
+        // Check current permission status first
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
             DispatchQueue.main.async {
-                if let error = error {
-                    AppLogger.log(tag: "LOG-APP: NotificationPermissionService", message: "requestNotificationPermissionWithContext() Error: \(error.localizedDescription)")
-                } else {
-                    AppLogger.log(tag: "LOG-APP: NotificationPermissionService", message: "requestNotificationPermissionWithContext() Permission granted: \(granted), context: \(context)")
+                AppLogger.log(tag: "LOG-APP: NotificationPermissionService", message: "requestNotificationPermissionWithContext() Current permission status: \(settings.authorizationStatus.rawValue)")
+                
+                // If already authorized, no need to request again
+                if settings.authorizationStatus == .authorized {
+                    AppLogger.log(tag: "LOG-APP: NotificationPermissionService", message: "requestNotificationPermissionWithContext() Permission already authorized, skipping request")
+                    onComplete(true)
+                    return
                 }
                 
-                // Register for remote notifications regardless of local permission
-                UIApplication.shared.registerForRemoteNotifications()
+                // Check if we should request permission (based on our internal logic)
+                guard self.shouldRequestPermission() else {
+                    AppLogger.log(tag: "LOG-APP: NotificationPermissionService", message: "requestNotificationPermissionWithContext() Permission already requested before, skipping")
+                    onComplete(false)
+                    return
+                }
                 
-                // Log result for analytics
-                UserDefaults.standard.set(granted, forKey: "notification_permission_granted")
+                AppLogger.log(tag: "LOG-APP: NotificationPermissionService", message: "requestNotificationPermissionWithContext() Proceeding to show iOS permission dialog")
                 
-                onComplete(granted)
+                // Mark as requested to prevent multiple requests
+                self.hasRequestedPermission = true
+                UserDefaults.standard.set(true, forKey: self.permissionRequestedKey)
                 
-                // Show settings alert only if permission was denied
-                if !granted {
-                    self.showNotificationSettingsAlert()
+                // Log context for analytics
+                UserDefaults.standard.set(context, forKey: "notification_permission_context")
+                UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "notification_permission_request_time")
+                
+                let authOptions: UNAuthorizationOptions = [.alert, .badge, .sound]
+                UNUserNotificationCenter.current().requestAuthorization(
+                    options: authOptions
+                ) { granted, error in
+                    DispatchQueue.main.async {
+                        if let error = error {
+                            AppLogger.log(tag: "LOG-APP: NotificationPermissionService", message: "requestNotificationPermissionWithContext() Error: \(error.localizedDescription)")
+                        } else {
+                            AppLogger.log(tag: "LOG-APP: NotificationPermissionService", message: "requestNotificationPermissionWithContext() iOS permission dialog completed - granted: \(granted), context: \(context)")
+                        }
+                        
+                        // Register for remote notifications regardless of local permission
+                        UIApplication.shared.registerForRemoteNotifications()
+                        
+                        // Log result for analytics
+                        UserDefaults.standard.set(granted, forKey: "notification_permission_granted")
+                        
+                        onComplete(granted)
+                        
+                        // Show settings alert only if permission was denied
+                        if !granted {
+                            self.showNotificationSettingsAlert()
+                        }
+                    }
                 }
             }
         }

@@ -20,6 +20,7 @@ struct ChatUser: Identifiable, Codable {
     var gender: String
     var deviceId: String
     var isOnline: Bool
+    var fcmToken: String? // FCM token for sending notifications
 }
 
 // MARK: - Direct Call Types

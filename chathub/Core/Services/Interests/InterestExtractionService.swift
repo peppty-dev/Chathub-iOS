@@ -30,9 +30,9 @@ final class InterestExtractionService {
         var strongSingleMentionThreshold: Double = 3.0  // Lower for activity words with boost
         var posNerBoostPerToken: Double = 0.5  // Increased boost for nouns/named entities
         var decayTimeConstantSeconds: TimeInterval = 60 * 30 // 30 min half-ish life
-        var showCooldownSeconds: TimeInterval = 60 * 10      // 10 min per-candidate after shown
-        var dislikeCooldownSeconds: TimeInterval = 60 * 60   // 1 hour suppression after dislike
-        var sessionMaxSuggestionsPerHour: Int = 3
+        var showCooldownSeconds: TimeInterval = 60 * 5       // REDUCED: 5 min per-candidate after shown
+        var dislikeCooldownSeconds: TimeInterval = 60 * 30   // REDUCED: 30 min suppression after dislike (max 1 hour as requested)
+        // REMOVED: sessionMaxSuggestionsPerHour - no rate limiting
         var maxPhraseLength: Int = 20  // Shorter since we're focusing on single words
         var minPhraseLength: Int = 3   // Keep minimum word length
         var maxDislikesBeforePermanentRemoval: Int = 2  // Remove suggestion after 2 rejections
@@ -42,7 +42,7 @@ final class InterestExtractionService {
     private var lastSuggestionByChat: [String: (phrase: String, timestamp: TimeInterval)] = [:]
 
     private var storesByChat: [String: Store] = [:]
-    private var suggestionsShownTimestamps: [TimeInterval] = []
+    // REMOVED: suggestionsShownTimestamps - no longer needed without rate limiting
 
     private let queue = DispatchQueue(label: "interest.extraction.queue", qos: .userInitiated)
 
@@ -147,7 +147,7 @@ final class InterestExtractionService {
                 cand.lastShownAt = now
                 cand.cooldownUntil = now + config.showCooldownSeconds
                 store.candidates[s] = cand
-                suggestionsShownTimestamps.append(now)
+                // REMOVED: suggestionsShownTimestamps tracking - no longer needed
             }
 
             storesByChat[chatId] = store
@@ -193,11 +193,8 @@ final class InterestExtractionService {
     // MARK: - Selection & Gating
 
     private func selectSuggestion(from store: Store, now: TimeInterval, existingInterests: [String], chatId: String) -> String? {
-        // Per-session rate limit: only a few per hour
-        let oneHourAgo = now - 3600
-        let shownLastHour = suggestionsShownTimestamps.filter { $0 > oneHourAgo }.count
-        if shownLastHour >= config.sessionMaxSuggestionsPerHour { return nil }
-
+        // REMOVED: Rate limiting - users can generate unlimited interest suggestions
+        
         // Avoid repeating the exact last suggestion back-to-back for this chat unless its score improved
         let lastForChat = lastSuggestionByChat[chatId]?.phrase
 
@@ -321,6 +318,12 @@ final class InterestExtractionService {
             }
         }
         
+        // Universal elongation normalization - normalize the word and check if base form is common
+        let normalizedWord = normalizeAnyElongatedWord(word)
+        if normalizedWord != word && Self.commonWordsToSkip.contains(normalizedWord) {
+            score -= 3.0  // Strong penalty for elongated common words
+        }
+        
         // Boost words with meaningful prefixes/suffixes (activities, interests)
         let meaningfulSuffixes = ["ing", "tion", "ness", "ment", "able", "ful"]
         let meaningfulPrefixes = ["un", "re", "pre", "dis", "over", "under"]
@@ -374,6 +377,84 @@ final class InterestExtractionService {
         // This uses Firebase-fetched word lists via ProfanityService
         return Profanity.share.doesContainProfanity(text)
     }
+    
+    /// Universal elongation normalizer - handles elongation ANYWHERE in the word
+    /// Examples: "footballlll" → "football", "fooootball" → "football", "cooookinggg" → "cooking"
+    private func normalizeAnyElongatedWord(_ word: String) -> String {
+        let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        
+        // Step 1: Multi-pass normalization to handle all consecutive repeated characters
+        // This handles elongation anywhere: beginning, middle, end, or multiple places
+        var normalized = trimmed
+        var previousNormalized = ""
+        var passCount = 0
+        
+        // Keep normalizing until no more changes (handles complex cases like "coooookinnnggg")
+        while normalized != previousNormalized && passCount < 5 {  // Safety limit to prevent infinite loops
+            previousNormalized = normalized
+            passCount += 1
+            
+            // Replace all instances of 3+ consecutive identical characters with single character
+            let consecutivePattern = "(.)\\1{2,}"  // 3+ consecutive identical characters ANYWHERE
+            normalized = normalized.replacingOccurrences(of: consecutivePattern, with: "$1", options: .regularExpression)
+        }
+        
+        // Step 2: Restore legitimate double letters for common words
+        // Some words naturally have double letters that we should preserve
+        let legitimateDoublePairs = [
+            // Common English double letters
+            ("footbal", "football"),       // Handle football specifically
+            ("swiming", "swimming"),       // Handle swimming specifically  
+            ("runing", "running"),         // Handle running specifically
+            ("hapines", "happiness"),      // Handle happiness specifically
+            ("succes", "success"),         // Handle success specifically
+            ("acces", "access"),           // Handle access specifically
+            ("proces", "process"),         // Handle process specifically
+            ("busines", "business"),       // Handle business specifically
+            ("profes", "profess"),         // Handle professional specifically
+            ("clas", "class"),             // Handle class specifically
+            ("dres", "dress"),             // Handle dress specifically
+            ("pres", "press"),             // Handle press specifically
+            ("ful", "full"),               // Handle full specifically
+            ("wel", "well"),               // Handle well specifically
+            ("tel", "tell"),               // Handle tell specifically
+            ("cel", "cell"),               // Handle cell specifically
+            ("bil", "bill"),               // Handle bill specifically
+            ("wil", "will"),               // Handle will specifically
+            ("hil", "hill"),               // Handle hill specifically
+            ("fil", "fill"),               // Handle fill specifically
+            ("kil", "kill"),               // Handle kill specifically
+        ]
+        
+        // Apply legitimate double letter restoration
+        for (single, double) in legitimateDoublePairs {
+            if normalized == single {
+                normalized = double
+                break
+            }
+        }
+        
+        // Step 3: Handle word-specific patterns that might need special treatment
+        let specialPatterns = [
+            ("^(okay)y*$", "$1"),           // okayyyy, okayyy → okay
+            ("^(yeah)h*$", "$1"),           // yeahhhh, yeahhh → yeah  
+            ("^(hello)o*$", "$1"),          // hellooo, helloo → hello
+            ("^(please)e*$", "$1"),         // pleaseee, pleasee → please
+            ("^(thanks)s*$", "$1"),         // thankssss, thankss → thanks
+            ("^(nice)e*$", "$1"),           // niceee, nicee → nice
+            ("^(cool)l*$", "$1"),           // coool, cool → cool (but preserve if already cool)
+        ]
+        
+        for (pattern, replacement) in specialPatterns {
+            let newNormalized = normalized.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression)
+            if newNormalized != normalized {
+                normalized = newNormalized
+                break
+            }
+        }
+        
+        return normalized
+    }
 
     private func boostedTokenSet(for text: String) -> Set<String> {
         let tagger = NLTagger(tagSchemes: [.lexicalClass, .nameType])
@@ -397,10 +478,22 @@ final class InterestExtractionService {
 
 
 
-    // MARK: - Common Words to Skip (Minimal list - ML handles most filtering)
-    // Keep only the most essential everyday words that ML might miss
+    // MARK: - Common Words to Skip (Comprehensive list to prevent noise)
     private static let commonWordsToSkip: Set<String> = [
-        "the", "a", "an", "and", "or", "but", "if", "then", "of", "to", "for", "with", "by", "from", "as", "at", "in", "on", "is", "are", "was", "were", "be", "been", "have", "has", "had", "do", "does", "did", "will", "would", "could", "should", "may", "might", "can", "this", "that", "these", "those", "i", "you", "he", "she", "we", "they", "me", "him", "her", "us", "them", "my", "your", "his", "her", "our", "their"
+        // Articles, prepositions, pronouns
+        "the", "a", "an", "and", "or", "but", "if", "then", "of", "to", "for", "with", "by", "from", "as", "at", "in", "on", "is", "are", "was", "were", "be", "been", "have", "has", "had", "do", "does", "did", "will", "would", "could", "should", "may", "might", "can", "this", "that", "these", "those", "i", "you", "he", "she", "we", "they", "me", "him", "her", "us", "them", "my", "your", "his", "her", "our", "their",
+        
+        // Greetings and common chat words
+        "hi", "hey", "hello", "hii", "hiiii", "helo", "hllo", "yo", "sup", "wassup", "whatsup",
+        
+        // Common responses and fillers
+        "yes", "yeah", "yep", "yup", "no", "nah", "nope", "ok", "okay", "kay", "sure", "wow", "omg", "lol", "lmao", "haha", "hehe", "hmm", "umm", "uhh", "uh", "oh", "ah", "so", "well", "like", "just", "really", "very", "much", "more", "most", "some", "any", "all", "both", "each", "every", "other", "another", "same", "different",
+        
+        // Question words
+        "what", "when", "where", "why", "who", "how", "which", "whose", "whom",
+        
+        // Time and basic words
+        "now", "then", "here", "there", "today", "tomorrow", "yesterday", "morning", "evening", "night", "day", "time", "good", "bad", "nice", "cool", "great", "awesome", "amazing", "perfect", "fine", "right", "wrong", "true", "false", "big", "small", "new", "old", "first", "last", "next", "back", "up", "down", "left", "right"
     ]
     
     // MARK: - Activity/Interest Keywords (Words that likely indicate hobbies, activities, or interests)

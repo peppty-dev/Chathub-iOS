@@ -191,19 +191,25 @@ struct NotificationSettingsView: View {
                         onAllow: {
                             AppLogger.log(tag: "LOG-APP: NotificationSettingsView", message: "notificationPermissionPopup onAllow() User agreed from settings")
                             
-                            // Request permission from settings context
-                            AppNotificationPermissionService.shared.requestNotificationPermissionWithContext(
-                                context: "from_settings_manual"
-                            ) { granted in
-                                AppLogger.log(tag: "LOG-APP: NotificationSettingsView", message: "notificationPermissionPopup iOS permission result: \(granted)")
-                                showNotificationPermissionPopup = false
-                                
-                                // Refresh permission status
-                                checkiOSPermissionStatus()
-                                
-                                if granted {
-                                    // Reset retry mechanism on success
-                                    AppNotificationPermissionService.shared.resetRetryMechanism()
+                            // Close custom popup immediately
+                            showNotificationPermissionPopup = false
+                            
+                            // Wait for custom popup to fully close before showing system popup
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                                // Request permission from settings context
+                                AppNotificationPermissionService.shared.requestNotificationPermissionWithContext(
+                                    context: "from_settings_manual"
+                                ) { granted in
+                                    AppLogger.log(tag: "LOG-APP: NotificationSettingsView", message: "notificationPermissionPopup iOS permission result: \(granted)")
+                                    
+                                    // Refresh permission status
+                                    checkiOSPermissionStatus()
+                                    
+                                    if granted {
+                                        // Reset retry mechanism on success
+                                        AppNotificationPermissionService.shared.resetRetryMechanism()
+                                        AppLogger.log(tag: "LOG-APP: NotificationSettingsView", message: "notificationPermissionPopup Permission granted from settings")
+                                    }
                                 }
                             }
                         },

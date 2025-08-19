@@ -32,8 +32,14 @@ struct MessagesView: View {
     @State private var isTyping: Bool = false
     @State private var isOtherUserTyping: Bool = false
 
-    @State private var isRecording: Bool = false
-
+        @State private var isRecording: Bool = false
+    
+    // Android-style typing + here status (Unique Feature Implementation)
+    @State private var typingDebounceWork: DispatchWorkItem?
+    @State private var typingActive: Bool = false
+    @State private var isHere: Bool = false // Tracks if other user is "here" in this chat
+    private let typingDelay: TimeInterval = 1.5
+    
     // Text editor focus state
     @FocusState private var isTextEditorFocused: Bool
 
@@ -42,6 +48,9 @@ struct MessagesView: View {
     @State private var fullScreenImageURL: String = ""
     @State private var showToast: Bool = false
     @State private var toastMessage: String = ""
+    
+    // MARK: - Screenshot Protection
+    @StateObject private var captureProtection = CaptureProtection()
     // Unified Info Gathering System (Periodic pill display)
     private enum InfoGatherContent {
         case interest(phrase: String)
@@ -82,6 +91,7 @@ struct MessagesView: View {
     
     // Status and Interests Section (Android Parity)
     @State private var currentUserStatus: String = "    " // Initialize with placeholder spaces to maintain view space
+    @State private var otherUserIsPremium: Bool = false // Track if OTHER USER is premium (Android parity)
     
     // Animation state variables for smooth status transitions
     @State private var statusAnimationScale: CGFloat = 1.0
@@ -107,7 +117,7 @@ struct MessagesView: View {
     @State private var aiStatusTimer: Timer? = nil
     
     // Notification Permission Integration (New)
-    @State private var showNotificationPermissionPopup: Bool = false
+    // Notification permission popup removed - now handled in ProfileView
     @State private var hasShownNotificationPopup: Bool = false
     
     // MARK: - Message Limit State
@@ -122,10 +132,10 @@ struct MessagesView: View {
     
     // Firebase listeners
     @State private var messageListener: ListenerRegistration? = nil
-    @State private var typingListener: ListenerRegistration? = nil
     @State private var statusListener: ListenerRegistration? = nil
     @State private var blockListener: ListenerRegistration? = nil
     @State private var liveListener: ListenerRegistration? = nil
+    @State private var androidDirectVideoListener: ListenerRegistration? = nil
     // Tracks known seen state by message ID to survive DB reloads
     @State private var messageSeenMap: [String: Bool] = [:]
     
@@ -149,6 +159,12 @@ struct MessagesView: View {
     @State private var conversationStarted: Bool = false
     @State private var moveToInbox: Bool = false
     @State private var messageSentThisSession: Bool = false // Android Parity: Track if message was sent (like MSGSENT)
+    
+    // MARK: - Android Parity: Notification State Variables
+    @State private var isThisChatPaid: Bool = false // Android: ISTHISCHATPAID
+    @State private var otherUserHasNotificationsDisabled: Bool = false // Android: MUTED - other user disabled notifications globally
+    @State private var otherUserHasMutedMe: Bool = false // Android: MINEMUTED - other user specifically muted me
+    @State private var aiChatEnabled: Bool = false // Android: AICHATENABLED
     
     @State private var hasFullyAppeared: Bool = false
     @State private var isViewBeingDismissed: Bool = false
@@ -223,10 +239,12 @@ struct MessagesView: View {
                 remoteVideoView: liveManager.remoteVideoView,
                 isVideoEnabled: liveManager.isVideoEnabled,
                 isMuted: liveManager.isMuted,
+                isRemoteAudioMuted: liveManager.isRemoteAudioMuted,
                 otherUserName: otherUser.name,
                 onCameraSwitch: { handleCameraSwitchButtonTap() },
                 onVideoToggle: { handleVideoToggleButtonTap() },
-                onMute: { handleMuteButtonTap() }
+                onLocalMute: { handleLocalMuteButtonTap() },
+                onRemoteMute: { handleRemoteMuteButtonTap() }
             )
             .onAppear {
                 withAnimation(.easeInOut(duration: 0.3)) {
@@ -238,8 +256,7 @@ struct MessagesView: View {
                     liveOverlayHeight = 0
                 }
             }
-            .transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity),
-                                    removal: .move(edge: .bottom).combined(with: .opacity)))
+            .transition(.move(edge: .top).combined(with: .opacity))
         }
     }
     
@@ -302,8 +319,8 @@ struct MessagesView: View {
                 AppLogger.log(tag: "LOG-APP: MessagesView", message: "messagesScrollView onAppear() - scrolling to bottom")
                 scrollToBottom(proxy: proxy)
             }
-            .onChange(of: messages.count) { oldCount in
-                AppLogger.log(tag: "LOG-APP: MessagesView", message: "messagesScrollView onChange() messages count changed from \(oldCount) to \(messages.count), isFirstLoad: \(isFirstLoad)")
+            .onChange(of: messages.count) { oldCount, newCount in
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "messagesScrollView onChange() messages count changed from \(oldCount) to \(newCount), isFirstLoad: \(isFirstLoad)")
                 
                 // ANDROID PARITY: With inverted scroll, scroll to first message (newest) which appears at bottom
                 if (oldCount == 0 && !messages.isEmpty) || isFirstLoad {
@@ -402,7 +419,21 @@ struct MessagesView: View {
     private var statusBlobView: some View {
         // ANDROID PARITY: Status is always visible like live button (no empty state check)
         // currentUserStatus is initialized with placeholder and updated by Firebase
-        HStack {
+        HStack(spacing: 4) {
+            let iconName = getStatusIcon(for: currentUserStatus)
+            if !iconName.isEmpty {
+                if iconName.hasPrefix("emoji:") || iconName.unicodeScalars.first?.properties.isEmoji == true {
+                    // Display emoji as text
+                    Text(iconName)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(getStatusTextColor())
+                } else {
+                    // Display SF Symbol
+                    Image(systemName: iconName)
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(getStatusTextColor())
+                }
+            }
             Text(capitalizeWords(currentUserStatus))
                 .font(.system(size: 12, weight: .bold))
                 .foregroundColor(getStatusTextColor())
@@ -425,7 +456,7 @@ struct MessagesView: View {
         .animation(.easeInOut(duration: 0.25), value: animationTrigger)
         // Scale animation trigger
         .animation(.easeOut(duration: 0.15), value: statusAnimationScale)
-        .onChange(of: currentUserStatus) { newStatus in
+        .onChange(of: currentUserStatus) { _, newStatus in
             performStatusChangeAnimation(newStatus: newStatus)
         }
     }
@@ -544,6 +575,8 @@ struct MessagesView: View {
                                 .foregroundColor(Color("dark"))
                                 .autocorrectionDisabled(false) // Android Parity: textAutoCorrect enabled
                                 .textInputAutocapitalization(.sentences) // Android Parity: textCapSentences
+                                .textContentType(.none) // Prevent password suggestions, enable word suggestions
+                                .keyboardType(.default) // Ensure default keyboard with word suggestions
                                 .frame(height: textHeight) // Dynamic height - starts at calculated height
                                 .padding(.leading, 10)
                                 .padding(.trailing, 4) // Minimal padding to photo button
@@ -557,6 +590,8 @@ struct MessagesView: View {
                                 .foregroundColor(Color("dark"))
                                 .autocorrectionDisabled(false) // Android Parity: textAutoCorrect enabled
                                 .textInputAutocapitalization(.sentences) // Android Parity: textCapSentences
+                                .textContentType(.none) // Prevent password suggestions, enable word suggestions
+                                .keyboardType(.default) // Ensure default keyboard with word suggestions
                                 .frame(height: textHeight) // Dynamic height - starts at calculated height
                                 .padding(.leading, 10)
                                 .padding(.trailing, 4) // Minimal padding to photo button
@@ -566,9 +601,15 @@ struct MessagesView: View {
                                 // iOS 14-15 use UITextView.appearance() from AppDelegate
                         }
                     }
-                        .onChange(of: messageText) { newText in
+                        .onChange(of: messageText) { _, newText in
                             updateTextHeight(for: newText)
-                            handleTyping()
+                            handleTypingDebounced()
+                        }
+                        .onChange(of: isTextEditorFocused) { _, focused in
+                            // Stop typing when losing focus
+                            if !focused {
+                                stopTypingOnAction()
+                            }
                         }
                 }
                 
@@ -718,57 +759,8 @@ struct MessagesView: View {
         Group {
             // Rating popup removed from MessagesView - now shown in MainView when returning
             
-            // MARK: - Notification Permission Popup Overlay (Contextual Request)
-            if showNotificationPermissionPopup {
-                AppNotificationPermissionPopupView(
-                    isPresented: $showNotificationPermissionPopup,
-                    onAllow: {
-                        AppLogger.log(tag: "LOG-APP: MessagesView", message: "notificationPermissionPopup onAllow() User agreed to allow notifications")
-                        
-                        // Handle both first-time and retry scenarios
-                        if AppNotificationPermissionService.shared.shouldShowRetryPopup() {
-                            // This is a retry scenario
-                            AppNotificationPermissionService.shared.requestRetryPermission(
-                                context: "after_message_engagement"
-                            ) { granted in
-                                AppLogger.log(tag: "LOG-APP: MessagesView", message: "notificationPermissionPopup retry iOS permission result: \(granted)")
-                                showNotificationPermissionPopup = false
-                                
-                                if granted {
-                                    // Reset retry mechanism on success
-                                    AppNotificationPermissionService.shared.resetRetryMechanism()
-                                }
-                            }
-                        } else {
-                            // First-time request - Use FCMTokenUpdateService for contextual token update
-                            FCMTokenUpdateService.shared.requestPermissionAndUpdateToken(
-                                context: "after_first_message"
-                            ) { success in
-                                AppLogger.log(tag: "LOG-APP: MessagesView", message: "notificationPermissionPopup FCM token update result: \(success)")
-                                showNotificationPermissionPopup = false
-                                
-                                if success {
-                                    // Reset retry mechanism on success
-                                    AppNotificationPermissionService.shared.resetRetryMechanism()
-                                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "notificationPermissionPopup FCM token updated successfully")
-                                } else {
-                                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "notificationPermissionPopup FCM token update failed, but user can continue chatting")
-                                }
-                            }
-                        }
-                    },
-                    onMaybeLater: {
-                        AppLogger.log(tag: "LOG-APP: MessagesView", message: "notificationPermissionPopup onMaybeLater() User chose maybe later")
-                        
-                        // Handle "maybe later" with retry mechanism
-                        AppNotificationPermissionService.shared.handleMaybeLaterResponse(context: "after_first_message")
-                        
-                        showNotificationPermissionPopup = false
-                        hasShownNotificationPopup = true // Mark as shown to prevent showing again in this session
-                    }
-                )
-                .zIndex(1000) // Ensure it appears above all other content
-            }
+            // MARK: - Notification Permission Popup Overlay (Moved to ProfileView)
+            // Notification permission popup has been moved to ProfileView to show when user clicks "start chat"
             
             // MARK: - Interests Popup Overlay (Android Parity)
             // Removed full-screen InterestsPopupView
@@ -793,22 +785,15 @@ struct MessagesView: View {
 
     @ToolbarContentBuilder
     private func toolbarContent() -> some ToolbarContent {
-        // Back button + badge + username with controlled spacing and centered alignment
+        // Back button (system-provided) + badge + username with controlled spacing and centered alignment
         ToolbarItem(placement: .navigationBarLeading) {
             HStack(spacing: 0) {
-                // Back chevron
-                Button(action: { presentationMode.wrappedValue.dismiss() }) {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 17, weight: .medium))
-                        .foregroundColor(Color("ColorAccent"))
-                }
-                .buttonStyle(PlainButtonStyle())
-
-                // Chats badge immediately next to chevron (no gap) - also clickable for better UX
+                // Chats badge immediately next to system back chevron (reduced gap)
                 if badgeManager.chatsBadgeCount > 0 {
                     Button(action: { presentationMode.wrappedValue.dismiss() }) {
                         BadgeView(count: badgeManager.chatsBadgeCount)
-                            .padding(.leading, 0)
+                            .padding(.leading, -25) // Negative padding to pull closer to back button
+                            .padding(.trailing, 8)
                     }
                     .buttonStyle(PlainButtonStyle())
                 }
@@ -982,9 +967,10 @@ struct MessagesView: View {
             toastOverlays
         }
         .overlay(overlayViews)
+        .effectiveScreenshotBlock() // Apply effective screenshot prevention
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
-        .navigationBarBackButtonHidden(true)
+        .navigationBarBackButtonHidden(false)
         .toolbar { toolbarContent() }
         .alert("Permission Required", isPresented: $showPermissionDialog) {
             Button("Cancel", role: .cancel) { }
@@ -1006,12 +992,19 @@ struct MessagesView: View {
         }
         .onAppear(perform: handleViewAppear)
         .onDisappear(perform: handleViewDisappear)
+        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ScreenshotAttemptDetected"))) { notification in
+            handleScreenshotAttempt(notification)
+        }
     }
     
     // MARK: - Lifecycle Methods
     
     private func handleViewAppear() {
         AppLogger.log(tag: "LOG-APP: MessagesView", message: "MessagesView onAppear() - ensuring scroll to bottom for latest messages")
+        
+        // MARK: - Screenshot Protection Setup
+        captureProtection.start()
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "Effective screenshot prevention enabled - content embedded in secure field")
         
         // Reset dismissal flags
         isViewBeingDismissed = false
@@ -1233,6 +1226,9 @@ struct MessagesView: View {
 
         // Clear "here" status when leaving this chat
         updateHereStatus(isActive: false)
+        
+        // Stop typing indicator when view disappears
+        stopTypingOnAction()
     
         // Otherwise, the view is likely being popped.
         AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() Performing cleanup and dismissal")
@@ -1480,6 +1476,10 @@ struct MessagesView: View {
         await loadMessages()
         setupFirebaseListeners()
         fetchOtherUserDetails()
+        fetchOtherUserPremiumStatus() // One-time fetch of other user's premium status
+        
+        // MARK: - Android Parity: Load notification state variables
+        loadNotificationStateVariables()
         
         if isAIChat {
             startAIStatusSimulation()
@@ -1556,20 +1556,8 @@ struct MessagesView: View {
 
     // MARK: - Here Status Updates (Android Parity)
     private func updateHereStatus(isActive: Bool) {
-        let myUserId = UserSessionManager.shared.userId ?? ""
-        guard !myUserId.isEmpty else { return }
-        let db = Firestore.firestore()
-        let userRef = db.collection("Users").document(myUserId)
-        let data: [String: Any] = [
-            "current_chat_uid_for_here": isActive ? otherUser.id : "null"
-        ]
-        userRef.setData(data, merge: true) { error in
-            if let error = error {
-                AppLogger.log(tag: "LOG-APP: MessagesView", message: "updateHereStatus() Failed to set here status: \(error.localizedDescription)")
-            } else {
-                AppLogger.log(tag: "LOG-APP: MessagesView", message: "updateHereStatus() Here status set to \(isActive ? "ACTIVE" : "INACTIVE") for chat with: \(otherUser.id)")
-            }
-        }
+        // Delegate to Android-style setHere function
+        setHere(isActive)
     }
     
     // MARK: - Message Read Status (Android Parity)
@@ -2369,6 +2357,10 @@ struct MessagesView: View {
         
         // Android Pattern: Do NOT create local message object
         // Only write to Firebase, the listener will catch it and save to local database
+        
+        // Stop typing indicator when sending message
+        stopTypingOnAction()
+        
         messageText = ""
         
         // Reset text height to single line after sending message (Progressive Growth Pattern)
@@ -2428,19 +2420,29 @@ struct MessagesView: View {
                     }
                     
                     // MARK: - Simplified Interest Processing
-                    // Process message for interest detection and queue for InfoGatherPill timing system
-                    SimplifiedInterestManager.shared.processNewMessage(text)
+                    // Process last 4 messages + current for better context-aware interest extraction
+                    let contextTexts = self.messages
+                        .suffix(4)
+                        .filter { !$0.containsProfanity }
+                        .map { $0.text }
+                    
+                    SimplifiedInterestManager.shared.processNewMessageWithContext(
+                        latestText: text,
+                        contextMessages: contextTexts,
+                        maxContext: 5
+                    )
                     
                     // CRITICAL FIX: Check if we should show a pill immediately after new suggestions are added
                     // This ensures pills appear promptly when new interests are detected during chat
                     triggerImmediatePillCheckIfNeeded()
                     
+                    // MARK: - Android Parity: Send Notification
+                    // Send notification to other user following same conditions as Android
+                    self.sendNotificationIfNeeded()
+                    
                     // MARK: - Contextual Notification Permission Request
-                    // Show notification permission popup after first message is successfully sent
-                    // This provides the perfect context for users to understand the value of notifications
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                        self.checkAndShowNotificationPermissionPopup()
-                    }
+                    // Notification permission popup is now handled in ProfileView when user starts chat
+                    // This provides better UX as user gives permission before entering the conversation
                 }
             }
         
@@ -2513,6 +2515,234 @@ struct MessagesView: View {
                     AppLogger.log(tag: "LOG-APP: MessagesView", message: "setMoveToInbox() Error: \(error.localizedDescription)")
                 } else {
                     AppLogger.log(tag: "LOG-APP: MessagesView", message: "setMoveToInbox() Success: inbox set to \(move) for other user")
+                }
+            }
+    }
+    
+    // MARK: - Android Parity: Notification Logic
+    
+    /// Send notification following same conditions as Android MessageTextActivity
+    private func sendNotificationIfNeeded() {
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "sendNotificationIfNeeded() Checking notification conditions")
+        
+        // Android Condition 1: AI Chat check (!AICHATENABLED)
+        if aiChatEnabled {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "notification blocked - AI chat enabled")
+            return
+        }
+        
+        // Android Condition 2: Muting checks (!MUTED && !MINEMUTED)
+        if otherUserHasNotificationsDisabled {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "notification blocked - other user has disabled notifications globally")
+            return
+        }
+        
+        if otherUserHasMutedMe {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "notification blocked - other user has specifically muted me")
+            return
+        }
+        
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "notification mute check passed")
+        
+        // Android Condition 3: Chat paid or conversation started (ISTHISCHATPAID || CONVERSATIONSTARTED)
+        if !isThisChatPaid && !conversationStarted {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "notification blocked - chat not paid and conversation not started")
+            return
+        }
+        
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "notification chat status check passed - paid: \(isThisChatPaid), conversation started: \(conversationStarted)")
+        
+        // Android Condition 4: Other user not currently active (!ISHERE)
+        if isHere {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "notification blocked - other user is currently active in chat")
+            return
+        }
+        
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "notification presence check passed - other user not here")
+        
+        // Android Condition 5: Message not already sent (!MSGSENT)
+        if !messageSentThisSession {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "notification blocked - message not confirmed sent")
+            return
+        }
+        
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "notification send status check passed")
+        
+        // Android Condition 6: Timing conditions (30-minute rule)
+        if otherUserIsOnline {
+            // If user is online, check if last seen was more than 30 minutes ago
+            if let lastSeen = otherUserLastSeen {
+                let thirtyMinutesAgo = Date().addingTimeInterval(-1800) // 1800 seconds = 30 minutes
+                if lastSeen > thirtyMinutesAgo {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "notification blocked - other user online and last seen within 30 minutes")
+                    return
+                }
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "notification timing check passed - other user online but last seen > 30 minutes ago")
+            }
+        } else {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "notification timing check passed - other user offline")
+        }
+        
+        // All conditions passed - send notification
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "notification all conditions passed - sending notification")
+        setUpNotification()
+    }
+    
+    /// Set up notification document in Firebase (matching Android setUpNotification)
+    private func setUpNotification() {
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "setUpNotification() preparing notification for user: \(otherUser.id)")
+        
+        // Fetch FCM token from Firestore using the same field name as Android
+        fetchOtherUserFCMToken { fcmToken in
+            guard let otherUserToken = fcmToken, !otherUserToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "setUpNotification() no FCM token available for other user")
+                return
+            }
+            
+            sendNotificationToFirestore(with: otherUserToken)
+        }
+    }
+    
+    /// Fetch FCM token for other user from Firestore (Android parity)
+    private func fetchOtherUserFCMToken(completion: @escaping (String?) -> Void) {
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "fetchOtherUserFCMToken() fetching token for user: \(otherUser.id)")
+        
+        Firestore.firestore().collection("Users").document(otherUser.id).getDocument { document, error in
+            if let error = error {
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "fetchOtherUserFCMToken() error: \(error.localizedDescription)")
+                completion(nil)
+                return
+            }
+            
+            guard let data = document?.data() else {
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "fetchOtherUserFCMToken() no document data found")
+                completion(nil)
+                return
+            }
+            
+            // Use same field name as Android
+            let fcmToken = data["User_device_token"] as? String
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "fetchOtherUserFCMToken() retrieved token: \(fcmToken?.prefix(20) ?? "nil")...")
+            completion(fcmToken)
+        }
+    }
+    
+    /// Send notification to Firestore (separated for clarity)
+    private func sendNotificationToFirestore(with otherUserToken: String) {
+        
+        let currentUserName = UserSessionManager.shared.userName ?? "Unknown"
+        let currentUserGender = UserSessionManager.shared.userGender ?? "Unknown"
+        let currentUserProfilePic = UserSessionManager.shared.userProfilePhoto ?? ""
+        
+        // Get current message text (assuming it's still in messageText when this is called)
+        let notificationContent = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        let notificationData: [String: Any] = [
+            "notification_type": "chat",
+            "notif_sender_name": currentUserName,
+            "notif_sender_id": currentUserId,
+            "notif_sender_gender": currentUserGender,
+            "notif_sender_image": currentUserProfilePic,
+            "notif_token": otherUserToken,
+            "notif_id": chatId,
+            "notif_content": notificationContent
+        ]
+        
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "setUpNotification() sending to token: \(otherUserToken.prefix(20))...")
+        
+        // Send to Firebase (matches Android path structure)
+        Firestore.firestore()
+            .collection("Notifications")
+            .document(otherUser.id)
+            .collection("Notifications_chat")
+            .document(currentUserId)
+            .setData(notificationData, merge: true) { error in
+                if let error = error {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "setUpNotification() failed: \(error.localizedDescription)")
+                } else {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "setUpNotification() success - notification document created")
+                }
+            }
+    }
+    
+    /// Load notification-related state variables (Android parity)
+    private func loadNotificationStateVariables() {
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "loadNotificationStateVariables() Loading notification state variables")
+        
+        // Check if this chat is paid (Android: ISTHISCHATPAID)
+        checkIfChatIsPaid()
+        
+        // Check muting status (Android: MUTED and MINEMUTED)
+        checkMutingStatus()
+        
+        // Set AI chat status (Android: AICHATENABLED)
+        aiChatEnabled = isAIChat
+        
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "loadNotificationStateVariables() AI chat enabled: \(aiChatEnabled)")
+    }
+    
+    /// Check if this chat is paid (matching Android's isThisChatPaid check)
+    private func checkIfChatIsPaid() {
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkIfChatIsPaid() Checking if chat is paid for chatId: \(chatId)")
+        
+        // In iOS, we can check if this came from a paid source or subscription status
+        // For now, we'll assume non-AI chats with premium users are "paid"
+        if !isAIChat && otherUserIsPremium {
+            isThisChatPaid = true
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkIfChatIsPaid() Chat marked as paid - premium user conversation")
+        } else {
+            isThisChatPaid = false
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkIfChatIsPaid() Chat marked as not paid")
+        }
+    }
+    
+    /// Check muting status (matching Android's MUTED and MINEMUTED checks)
+    private func checkMutingStatus() {
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkMutingStatus() Checking muting status between users")
+        
+        // Check if other user has disabled notifications globally (Android: MUTED)
+        // This checks if other user's own ID exists in their own BlockedNotificationList
+        Firestore.firestore()
+            .collection("Users")
+            .document(otherUser.id)
+            .collection("BlockedNotificationList")
+            .document(otherUser.id) // FIXED: Check for their own ID in their own list
+            .getDocument { snapshot, error in
+                
+                if let error = error {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkMutingStatus() Error checking if other user disabled notifications: \(error.localizedDescription)")
+                    return
+                }
+                
+                if let document = snapshot, document.exists {
+                    otherUserHasNotificationsDisabled = document.data()?.keys.contains("blocked_notification_id") ?? false
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkMutingStatus() Other user has notifications disabled: \(otherUserHasNotificationsDisabled)")
+                } else {
+                    otherUserHasNotificationsDisabled = false
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkMutingStatus() Other user has notifications enabled")
+                }
+            }
+        
+        // Check if other user has specifically muted me (Android: MINEMUTED)  
+        // This checks if my ID exists in other user's BlockedNotificationList
+        Firestore.firestore()
+            .collection("Users")
+            .document(otherUser.id)
+            .collection("BlockedNotificationList")
+            .document(currentUserId)
+            .getDocument { snapshot, error in
+                
+                if let error = error {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkMutingStatus() Error checking if other user muted me: \(error.localizedDescription)")
+                    return
+                }
+                
+                if let document = snapshot, document.exists {
+                    otherUserHasMutedMe = document.data()?.keys.contains("blocked_notification_id") ?? false
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkMutingStatus() Other user has specifically muted me: \(otherUserHasMutedMe)")
+                } else {
+                    self.otherUserHasMutedMe = false
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkMutingStatus() Other user has not specifically muted me")
                 }
             }
     }
@@ -2607,68 +2837,29 @@ struct MessagesView: View {
     
     // MARK: - Helper Methods
     
-    /// Check if we should show notification permission popup after first message or retry
-    /// This provides contextual permission request when user understands the value
-    private func checkAndShowNotificationPermissionPopup() {
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkAndShowNotificationPermissionPopup() Checking if notification permission popup should be shown")
+    // MARK: - Screenshot Protection Methods
+    
+    private func handleScreenshotAttempt(_ notification: Notification) {
+        guard let attemptCount = notification.userInfo?["attemptCount"] as? Int else { return }
         
-        // Don't show if already shown in this session
-        guard !hasShownNotificationPopup else {
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkAndShowNotificationPermissionPopup() Already shown in this session")
-            return
-        }
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleScreenshotAttempt() - Screenshot attempt #\(attemptCount) blocked in anonymous chat")
         
-        // Don't show for AI chats (they don't reply with real notifications)
-        guard !isAIChat else {
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkAndShowNotificationPermissionPopup() Skipping for AI chat")
-            return
-        }
-        
-        // Check if this is a retry scenario (user previously said "maybe later")
-        // Retry Logic: Shows popup again after user sends/receives 15 more messages since "maybe later"
-        // This ensures user is actively engaged before asking again (max 3 retry attempts)
-        if AppNotificationPermissionService.shared.shouldShowRetryPopup() {
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkAndShowNotificationPermissionPopup() Showing retry popup after user engagement (15+ messages since maybe later)")
-            showRetryNotificationPermissionPopup()
-            return
-        }
-        
-        // Don't show if permission already requested/granted
-        guard AppNotificationPermissionService.shared.shouldRequestPermission() else {
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkAndShowNotificationPermissionPopup() Permission already requested or granted")
-            return
-        }
-        
-        // Check if this is user's first message in this chat (contextual trigger)
-        let userMessageCount = messages.filter { $0.isFromCurrentUser }.count
-        guard userMessageCount == 1 else {
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkAndShowNotificationPermissionPopup() Not first message (count: \(userMessageCount))")
-            return
-        }
-        
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "checkAndShowNotificationPermissionPopup() Showing first-time notification permission popup")
-        
-        // Show the custom popup with explanation
-        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-            showNotificationPermissionPopup = true
-        }
-        
-        // Mark as shown to prevent showing again in this session
-        hasShownNotificationPopup = true
+        // No toast needed - screenshot is prevented, so user doesn't need notification
+        // Just log the attempt for analytics/monitoring purposes
+        handleScreenshotResponse()
     }
     
-    /// Show retry notification permission popup with updated messaging
-    private func showRetryNotificationPermissionPopup() {
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "showRetryNotificationPermissionPopup() Showing retry popup")
+    private func handleScreenshotResponse() {
+        // Additional response to screenshot attempt
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleScreenshotResponse() - Applying additional security measures")
         
-        // Show the same popup but with retry context
-        withAnimation(.spring(response: 0.6, dampingFraction: 0.8)) {
-            showNotificationPermissionPopup = true
-        }
-        
-        // Mark as shown to prevent showing again in this session
-        hasShownNotificationPopup = true
+        // You can add additional security measures here if needed
+        // For example: temporary content blur, logging, etc.
     }
+    
+    // MARK: - Notification Permission Logic (Moved to ProfileView)
+    // Notification permission popup logic has been moved to ProfileView
+    // This provides better UX as permission is requested when user initiates chat
     
     // Removed: checkAndShowInterestsPopup (no longer showing full-screen interests popup)
     
@@ -2726,35 +2917,69 @@ struct MessagesView: View {
         MessagingSettingsSessionManager.shared.setLastUserMessage(text, for: chatId)
     }
     
-    private func handleTyping() {
-        // Send typing indicator to other user
-        if !isAIChat {
-            let typingData: [String: Any] = [
-                "typing": true,
-                "timestamp": Date()
-            ]
-            
-            Firestore.firestore()
-                .collection("Chats")
-                .document(chatId)
-                .collection("Typing")
-                .document(currentUserId)
-                .setData(typingData)
-            
-            // Stop typing indicator after 3 seconds
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-                let stopTypingData: [String: Any] = [
-                    "typing": false,
-                    "timestamp": Date()
-                ]
-                
-                Firestore.firestore()
-                    .collection("Chats")
-                    .document(chatId)
-                    .collection("Typing")
-                    .document(currentUserId)
-                    .setData(stopTypingData)
+    // MARK: - Android-Style Typing + Here Status (Unique Feature)
+    
+    private func handleTypingDebounced() {
+        // Only process if not AI chat
+        guard !isAIChat else { return }
+        
+        // Android-style debounced typing: Leading edge triggers, trailing edge stops
+        if !typingActive {
+            typingActive = true
+            setIsTyping(true)
+        }
+        
+        // Reset the stop timer with each keystroke
+        typingDebounceWork?.cancel()
+        let work = DispatchWorkItem {
+            self.typingActive = false
+            self.setIsTyping(false)
+        }
+        typingDebounceWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + typingDelay, execute: work)
+    }
+    
+    private func setIsTyping(_ isTyping: Bool) {
+        let currentUserId = UserSessionManager.shared.userId ?? ""
+        
+        // Android-style: Update Users/{currentUserId} with other_user_typing field
+        let data: [String: Any] = ["other_user_typing": isTyping]
+        
+        Firestore.firestore()
+            .collection("Users")
+            .document(currentUserId)
+            .setData(data, merge: true) { error in
+                if let error = error {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "setIsTyping() Error: \(error.localizedDescription)")
+                }
             }
+    }
+    
+    private func setHere(_ isAmHere: Bool) {
+        let currentUserId = UserSessionManager.shared.userId ?? ""
+        
+        // Android-style: Update current_chat_uid_for_here field
+        let chatUid = isAmHere ? otherUser.id : "null"
+        let data: [String: Any] = ["current_chat_uid_for_here": chatUid]
+        
+        Firestore.firestore()
+            .collection("Users")
+            .document(currentUserId)
+            .setData(data, merge: true) { error in
+                if let error = error {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "setHere() Error: \(error.localizedDescription)")
+                }
+            }
+        
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "setHere() called with isAmHere: \(isAmHere), chatUid: \(chatUid)")
+    }
+    
+    private func stopTypingOnAction() {
+        // Force stop typing on send/blur/dismiss
+        typingDebounceWork?.cancel()
+        if typingActive {
+            typingActive = false
+            setIsTyping(false)
         }
     }
     
@@ -2764,7 +2989,6 @@ struct MessagesView: View {
         AppLogger.log(tag: "LOG-APP: MessagesView", message: "setupFirebaseListeners() Setting up Firebase listeners")
         
         setupMessageListener()
-        setupTypingListener()
         setupStatusListener()
         setupBlockListener()
         setupLiveListeners() // Add live listeners
@@ -2774,16 +2998,16 @@ struct MessagesView: View {
         AppLogger.log(tag: "LOG-APP: MessagesView", message: "removeFirebaseListeners() Removing Firebase listeners")
         
         messageListener?.remove()
-        typingListener?.remove()
         statusListener?.remove()
         blockListener?.remove()
         liveListener?.remove()
+        androidDirectVideoListener?.remove()
         
         messageListener = nil
-        typingListener = nil
         statusListener = nil
         blockListener = nil
         liveListener = nil
+        androidDirectVideoListener = nil
     }
     
     private func setupLiveListeners() {
@@ -2810,12 +3034,90 @@ struct MessagesView: View {
                         AppLogger.log(tag: "LOG-APP: MessagesView", message: "setupLiveListeners() Other user live status: \(isLiveOn)")
                         
                         if isLiveOn && self.isLiveOn {
-                            // Both users have live on - show toast
-                            self.showToastMessage("Live connected")
+                            // Both users have live on
+                            // Toast notification removed per user request
                         }
                     }
                 }
             }
+        
+        // CROSS-PLATFORM SYNC: Listen to Android direct video triggers
+        // This allows iOS to respond when Android users start direct video
+        setupAndroidDirectVideoListener()
+    }
+    
+    // MARK: - CROSS-PLATFORM SYNC: Android Direct Video Listener
+    
+    private func setupAndroidDirectVideoListener() {
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "setupAndroidDirectVideoListener() Setting up Android direct video compatibility listener")
+        
+        // Listen to Android direct video format in the main Chats document
+        // Android sets "direct_video_{userId}" in the Chats document
+        androidDirectVideoListener = Firestore.firestore()
+            .collection("Chats")
+            .document(chatId)
+            .addSnapshotListener { documentSnapshot, error in
+                
+                if let error = error {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "setupAndroidDirectVideoListener() Error: \(error.localizedDescription)")
+                    return
+                }
+                
+                guard let document = documentSnapshot, document.exists, let data = document.data() else {
+                    return
+                }
+                
+                // Check if Android user started direct video
+                let androidDirectVideoKey = "direct_video_\(self.otherUser.id)"
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "setupAndroidDirectVideoListener() 🔍 Checking for key: \(androidDirectVideoKey) in document data")
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "setupAndroidDirectVideoListener() 📋 All document keys: \(Array(data.keys))")
+                
+                if let androidDirectVideoActive = data[androidDirectVideoKey] as? Bool {
+                    DispatchQueue.main.async {
+                        AppLogger.log(tag: "LOG-APP: MessagesView", message: "setupAndroidDirectVideoListener() ✅ Found Android direct video status: \(androidDirectVideoActive)")
+                        
+                        if androidDirectVideoActive && !self.isLiveOn {
+                            // Android user started direct video, automatically start iOS live to join
+                            AppLogger.log(tag: "LOG-APP: MessagesView", message: "setupAndroidDirectVideoListener() 🚀 Android user started direct video, auto-starting iOS live")
+                            self.autoStartLiveForAndroidDirectVideo()
+                        } else if !androidDirectVideoActive && self.isLiveOn {
+                            // Android user stopped direct video, check if we should stop iOS live
+                            AppLogger.log(tag: "LOG-APP: MessagesView", message: "setupAndroidDirectVideoListener() 🛑 Android user stopped direct video")
+                            // Don't auto-stop iOS live as user might want to continue
+                            // Toast notification removed per user request
+                        }
+                    }
+                } else {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "setupAndroidDirectVideoListener() ❌ Key \(androidDirectVideoKey) not found or not a boolean")
+                }
+            }
+    }
+    
+    private func autoStartLiveForAndroidDirectVideo() {
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "autoStartLiveForAndroidDirectVideo() Auto-starting live for Android direct video compatibility")
+        
+        // Check permissions first
+        if !hasPermission(for: .microphone) || !hasPermission(for: .camera) {
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "autoStartLiveForAndroidDirectVideo() Missing permissions, showing permission dialog")
+            permissionDialogType = .liveFeature
+            showPermissionDialog = true
+            return
+        }
+        
+        // Check subscription and time allocation
+        let subscriptionManager = SubscriptionSessionManager.shared
+        let hasPlusAccess = subscriptionManager.hasPlusTierOrHigher()
+        let currentSeconds = MessagingSettingsSessionManager.shared.liveSeconds
+        
+        if hasPlusAccess || currentSeconds > 0 {
+            // Start live to join Android direct video
+            startLive()
+            // Toast notification removed per user request
+        } else {
+            // Show monetization dialog
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "autoStartLiveForAndroidDirectVideo() No subscription or time remaining, showing monetization")
+            showLiveCallMonetizationDialog()
+        }
     }
     
     private func setupMessageListener() {
@@ -2898,36 +3200,6 @@ struct MessagesView: View {
             }
     }
     
-    private func setupTypingListener() {
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "setupTypingListener() Setting up typing indicator listener")
-        
-        // Typing indicator listener
-        if !isAIChat {
-            typingListener = Firestore.firestore()
-                .collection("Chats")
-                .document(chatId)
-                .collection("Typing")
-                .document(otherUser.id)
-                .addSnapshotListener { snapshot, error in
-                    guard let snapshot = snapshot, snapshot.exists else { return }
-                    
-                    let data = snapshot.data() ?? [:]
-                    let typing = data["typing"] as? Bool ?? false
-                    let timestamp = (data["timestamp"] as? Timestamp)?.dateValue() ?? Date()
-                    
-                    // Show typing indicator only if recent (within 5 seconds)
-                    let isRecent = Date().timeIntervalSince(timestamp) < 5
-                    
-                    DispatchQueue.main.async {
-                        isOtherUserTyping = typing && isRecent
-                        
-                        // Update status display when typing state changes (Android Parity)
-                        updateUserStatus()
-                    }
-                }
-        }
-    }
-    
     private func setupStatusListener() {
         AppLogger.log(tag: "LOG-APP: MessagesView", message: "setupStatusListener() Setting up user status listener")
         
@@ -2952,8 +3224,13 @@ struct MessagesView: View {
                 let otherUserTyping = data["other_user_typing"] as? Bool ?? false
                 let playingGames = data["playing_games"] as? Bool ?? false
                 let onCall = data["on_call"] as? Bool ?? false
+                let onDirectVoice = data["on_direct_voice"] as? Bool ?? false
+                let onDirectVideo = data["on_direct_video"] as? Bool ?? false
                 let onLive = data["on_live"] as? Bool ?? false
                 let currentChatUidForHere = data["current_chat_uid_for_here"] as? String ?? "null"
+                
+                // Debug logging for Firebase data
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "DEBUG - Firebase Status Data: online=\(isUserOnline), typing=\(otherUserTyping), chatUid=\(currentChatUidForHere), currentUserId=\(self.currentUserId)")
                 let hereTimestamp = (data["here_timestamp"] as? Timestamp)?.dateValue()
                 let interestTags = data["interest_tags"] as? [String] ?? []
                 let interestSentence = data["interest_sentence"] as? String ?? ""
@@ -2963,67 +3240,56 @@ struct MessagesView: View {
                     self.otherUserInterests = interestTags
                     self.displayInterests(tags: interestTags, sentence: interestSentence)
                     
-                    // Check if other user is "here" in current chat (Android Parity)
-                    let isHere = currentChatUidForHere.lowercased() == self.currentUserId.lowercased()
+                    // Android-style: Update all state variables first
+                    self.otherUserIsOnline = isUserOnline
+                    self.isOtherUserTyping = otherUserTyping
+                    self.isHere = currentChatUidForHere.lowercased() == self.currentUserId.lowercased()
                     
-                    // Update status based on Android logic exactly
+                    // Update last seen timestamp
+                    if let timestamp = data["last_time_seen"] as? Timestamp {
+                        self.otherUserLastSeen = timestamp.dateValue()
+                    }
+                    
+                    // Android Parity: Mark messages as seen when user is "here" (equivalent to Android's markAsSeenAsyncTask)
+                    if self.isHere {
+                        self.markMessagesAsSeen()
+                    }
+                    
+                    // Handle special statuses first (they override the 4-state matrix)
                     if isUserOnline {
                         if self.isAIChat {
                             // AI chat handling
                             self.handleAIStatus()
-                        } else if playingGames && !self.isPremiumUser {
-                            self.updateStatus("Playing games", color: "color_card_playing")
-                        } else if onLive && !self.isPremiumUser {
-                            self.updateStatus("Live session", color: "color_card_call")
-                        } else if onCall && !self.isPremiumUser {
-                            self.updateStatus("On a call", color: "color_card_call")
-                        } else if isHere {
-                            if otherUserTyping {
-                                self.updateStatus("Typing…", color: "color_card_typing")
-                                self.isOtherUserTyping = true
-                            } else {
-                                self.updateStatus("In chat", color: "color_card_here")
-                                self.isOtherUserTyping = false
-                            }
-                            // Android Parity: Mark messages as seen when user is "here" (equivalent to Android's markAsSeenAsyncTask)
-                            self.markMessagesAsSeen()
-                        } else {
-                            if otherUserTyping && !self.isPremiumUser {
-                                self.updateStatus("Chatting with someone else", color: "color_card_typing")
-                                self.isOtherUserTyping = true
-                            } else {
-                                self.updateStatus("Online", color: "color_card_online")
-                                self.isOtherUserTyping = false
-                            }
+                            return // Exit early to avoid overriding AI status
+                        } else if playingGames && !self.otherUserIsPremium {
+                            self.currentUserStatus = "Playing games"
+                            return
+                        } else if onDirectVoice && !self.otherUserIsPremium {
+                            self.currentUserStatus = "On direct voice"
+                            return
+                        } else if onDirectVideo && !self.otherUserIsPremium {
+                            self.currentUserStatus = "On direct video"
+                            return
+                        } else if onCall && !self.otherUserIsPremium {
+                            self.currentUserStatus = "On a call"
+                            return
+                        } else if onLive && !self.otherUserIsPremium {
+                            self.currentUserStatus = "On chathub live" 
+                            return
                         }
-                    } else {
-                        // User is offline
-                        if self.isAIChat {
-                            // AI offline handling -> always show unified Last seen format
-                            if let timeString = timeString {
-                                self.updateStatus("Last seen: \(timeString) ago", color: "color_card_offline")
-                            } else {
-                                self.updateStatus("Last seen: 1s ago", color: "color_card_offline")
-                            }
-                        } else {
-                            if let timeString = timeString {
-                                self.updateStatus("Last seen: \(timeString) ago", color: "color_card_offline")
-                            } else {
-                                self.updateStatus("Last seen: 1s ago", color: "color_card_offline")
-                            }
-                        }
-                        self.isOtherUserTyping = false
                     }
                     
-                    // Update other properties
-                    self.otherUserIsOnline = isUserOnline
-                    if let timestamp = data["last_time_seen"] as? Timestamp {
-                        self.otherUserLastSeen = timestamp.dateValue()
-                    }
-                    self.otherUserChattingInCurrentChat = isHere
+                    // Use the Android-style 4-state decision matrix for normal cases
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "DEBUG - About to call updateUserStatus() - online: \(isUserOnline), typing: \(otherUserTyping), here: \(self.isHere)")
+                    self.updateUserStatus()
+                    
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "Status listener updated - online: \(isUserOnline), typing: \(otherUserTyping), here: \(self.isHere), final status: \(self.currentUserStatus)")
+                    
+                    // Track additional state for Android parity  
+                    self.otherUserChattingInCurrentChat = self.isHere
                     
                     // Track enter/leave moments using here_timestamp if provided
-                    if isHere {
+                    if self.isHere {
                         self.otherUserHereEnterTime = hereTimestamp ?? Date()
                         // While here, mark our sent messages as seen in real time
                         self.markSentMessagesAsSeenLocally(upTo: nil)
@@ -3034,6 +3300,37 @@ struct MessagesView: View {
                             self.markSentMessagesAsSeenLocally(upTo: leaveTime)
                         }
                     }
+                }
+            }
+    }
+    
+    private func fetchOtherUserPremiumStatus() {
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "fetchOtherUserPremiumStatus() Fetching other user's premium status (one-time)")
+        
+        // One-time fetch of OTHER USER's premium status (more efficient than listener)
+        Firestore.firestore()
+            .collection("Users")
+            .document(otherUser.id)
+            .collection("Premium")
+            .document("Premium")
+            .getDocument { snapshot, error in
+                guard let snapshot = snapshot, snapshot.exists else {
+                    DispatchQueue.main.async {
+                        self.otherUserIsPremium = false
+                        AppLogger.log(tag: "LOG-APP: MessagesView", message: "fetchOtherUserPremiumStatus() Other user premium document not found - defaulting to false")
+                    }
+                    return
+                }
+                
+                let data = snapshot.data() ?? [:]
+                let premiumActive = data["premium_active"] as? Bool ?? false
+                
+                DispatchQueue.main.async {
+                    self.otherUserIsPremium = premiumActive
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "fetchOtherUserPremiumStatus() Other user premium status: \(premiumActive)")
+                    
+                    // Trigger status update since premium status affects display
+                    self.updateUserStatus()
                 }
             }
     }
@@ -3235,6 +3532,10 @@ struct MessagesView: View {
                      
                      // Increment per-user message count for message limit popup
                      MessagingSettingsSessionManager.shared.incrementMessageCount(otherUserId: self.otherUser.id)
+                     
+                     // MARK: - Android Parity: Send Notification for Image Message
+                     // Send notification to other user following same conditions as Android
+                     self.sendNotificationIfNeeded()
                  }
              }
     }
@@ -3376,11 +3677,18 @@ struct MessagesView: View {
         liveManager.toggleVideo()
     }
     
-    private func handleMuteButtonTap() {
+    private func handleLocalMuteButtonTap() {
         triggerHapticFeedback()
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleMuteButtonTap() Mute button tapped")
-        // Toggle audio mute
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleLocalMuteButtonTap() Local mic mute button tapped")
+        // Toggle local audio mute (our microphone)
         liveManager.toggleMute()
+    }
+    
+    private func handleRemoteMuteButtonTap() {
+        triggerHapticFeedback()
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleRemoteMuteButtonTap() Remote audio mute button tapped")
+        // Toggle remote audio mute (other person's audio)
+        liveManager.toggleRemoteAudioMute()
     }
     
     private func handleGamesButtonTap() {
@@ -3410,8 +3718,7 @@ struct MessagesView: View {
         // Android Pattern: Update UI (matching directVideoAnimation(true) and show camera_switch)
         // The UI will automatically update due to the state change in liveOverlayView
         
-        // Android Pattern: Show toast
-        showToastMessage("Live connected")
+        // Android Pattern: Toast notification removed per user request
     }
     
     // MARK: - Android Parity: LiveSeconds Replenishment Logic
@@ -3527,14 +3834,61 @@ struct MessagesView: View {
             .document(currentUserId)
             .setData(liveData)
         
+        // CROSS-PLATFORM SYNC: Also set Android direct video format
+        // This ensures Android users see the iOS live functionality as direct video
+        let androidCompatData: [String: Any] = [
+            "direct_video_\(currentUserId)": isOn,
+            "timestamp": Date()
+        ]
+        
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "setLive() CROSS-PLATFORM DEBUG - Setting Android compatibility data: direct_video_\(currentUserId) = \(isOn) in chatId: \(chatId)")
+        
+        Firestore.firestore()
+            .collection("Chats")
+            .document(chatId)
+            .setData(androidCompatData, merge: true) { error in
+                if let error = error {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "setLive() Error setting Android compatibility data: \(error.localizedDescription)")
+                } else {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "setLive() ✅ CROSS-PLATFORM SUCCESS - Android compatibility data written: direct_video_\(self.currentUserId) = \(isOn)")
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "setLive() 🔍 Android should now see this field in Chats/\(self.chatId) and auto-trigger direct video")
+                }
+            }
+        
         // Also call the setOnLive method (matching Android pattern)
         setOnLive(isOn)
     }
     
     private func setOnLive(_ isOn: Bool) {
-        // Android Pattern: Additional status update method
+        // Android Pattern: Update user's on_live status in Users collection
         AppLogger.log(tag: "LOG-APP: MessagesView", message: "setOnLive() isOn: \(isOn)")
-        // This method can be used for additional status tracking if needed
+        
+        // Update the user's status in Users collection with comprehensive live data
+        var userData: [String: Any] = [
+            "on_live": isOn,
+            "on_direct_video": isOn, // CROSS-PLATFORM SYNC: Android compatibility
+            "timestamp": Date()
+        ]
+        
+        // When starting live, also set the current chat context
+        if isOn {
+            userData["current_chat_uid_for_live"] = otherUser.id
+            userData["live_timestamp"] = Date()
+        } else {
+            // When ending live, clear the context
+            userData["current_chat_uid_for_live"] = "null"
+        }
+        
+        Firestore.firestore()
+            .collection("Users")
+            .document(currentUserId)
+            .setData(userData, merge: true) { error in
+                if let error = error {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "setOnLive() Error updating Users collection: \(error.localizedDescription)")
+                } else {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "setOnLive() Successfully updated Users collection with on_live: \(isOn), on_direct_video: \(isOn), chat_uid: \(isOn ? self.otherUser.id : "null")")
+                }
+            }
     }
     
     private func showLiveCallMonetizationDialog() {
@@ -3728,7 +4082,7 @@ struct MessagesView: View {
     private func getStatusTextColor() -> Color {
         let status = currentUserStatus.lowercased()
         switch status {
-        case "online", "here":
+        case "online", "here", "in chat":
             // Bright colored backgrounds → white text
             return .white
         case let s where s.contains("typing"):
@@ -3750,6 +4104,36 @@ struct MessagesView: View {
         default:
             // Default to dark-on-light for neutral/gray pills
             return Color("shade6")
+        }
+    }
+    
+    private func getStatusIcon(for status: String) -> String {
+        let normalizedStatus = status.lowercased()
+        switch normalizedStatus {
+        case "in chat":
+            return "👀"
+        case let s where s.contains("typing"):
+            return "text.bubble"
+        case "online":
+            return "circle.fill"
+        case let s where s.contains("chatting"):
+            return "bubble.left.and.bubble.right.fill"
+        case let s where s.contains("playing"):
+            return "gamecontroller.fill"
+        case let s where s.contains("direct voice"):
+            return "phone.fill"
+        case let s where s.contains("direct video"):
+            return "video.fill"
+        case let s where s.contains("call"):
+            return "phone.fill"
+        case let s where s.contains("chathub live"), let s where s.contains("live"):
+            return "tv.fill"
+        case let s where s.contains("last seen"):
+            return "clock.fill"
+        case "offline":
+            return "zzz"
+        default:
+            return ""
         }
     }
     
@@ -3849,9 +4233,13 @@ struct MessagesView: View {
     }
     
     private func updateUserStatus() {
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "updateUserStatus() Updating user status display")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "updateUserStatus() Updating user status display with Android-style decision matrix")
+        
+        // Debug logging for "Chatting with someone else" detection
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "DEBUG - Status Variables: isHere=\(isHere), isOtherUserTyping=\(isOtherUserTyping), otherUserIsOnline=\(otherUserIsOnline), otherUserIsPremium=\(otherUserIsPremium)")
         
         if isAIChat {
+            // AI chat logic (unchanged)
             switch aiStatus.lowercased() {
             case "typing":
                 currentUserStatus = "Typing…"
@@ -3867,24 +4255,41 @@ struct MessagesView: View {
             default:
                 currentUserStatus = aiStatus.capitalized
             }
-        } else if isOtherUserTyping {
-            currentUserStatus = "Typing…"
-        } else if otherUserIsOnline {
-            currentUserStatus = "Online"
         } else {
-            if let lastSeen = otherUserLastSeen {
-                let timeAgo = formatLastSeenTime(lastSeen)
-                currentUserStatus = "Last seen: \(timeAgo) ago"
+            // Android-style 4-state decision matrix
+            // Note: We check OTHER USER's premium status, not current user's (Android parity)
+            
+            if isHere {
+                // Other user is "here" in this specific chat
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "DEBUG - User is HERE in this chat")
+                if isOtherUserTyping {
+                    currentUserStatus = "Typing…"
+                } else {
+                    currentUserStatus = "In chat"
+                }
             } else {
-                // Only update to "now" if we have actual data, otherwise keep initial status
-                // This prevents overriding "Connecting..." with empty data during initial load
-                if !otherUserLastSeen.debugDescription.isEmpty || otherUserIsOnline {
+                // Other user is not in this chat (somewhere else or offline)
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "DEBUG - User is NOT HERE - checking typing status")
+                if isOtherUserTyping && !otherUserIsPremium {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "DEBUG - Setting status to 'Chatting with someone else…' - typing=\(isOtherUserTyping), otherUserIsPremium=\(otherUserIsPremium)")
+                    currentUserStatus = "Chatting with someone else…"
+                } else if otherUserIsOnline {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "DEBUG - Setting status to 'Online' - online=\(otherUserIsOnline)")
                     currentUserStatus = "Online"
+                } else {
+                    AppLogger.log(tag: "LOG-APP: MessagesView", message: "DEBUG - Setting status to 'Last seen' - user offline")
+                    // Show last seen time for offline users
+                    if let lastSeen = otherUserLastSeen {
+                        let timeAgo = formatLastSeenTime(lastSeen)
+                        currentUserStatus = "Last seen: \(timeAgo) ago"
+                    } else {
+                        currentUserStatus = "Online"
+                    }
                 }
             }
         }
         
-        // Status and interests container is always visible now (Android parity)
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "Status updated to: \(currentUserStatus) (isHere: \(isHere), isTyping: \(isOtherUserTyping), isOnline: \(otherUserIsOnline))")
     }
     
     private func formatLastSeenTime(_ date: Date) -> String {
@@ -4030,10 +4435,12 @@ struct LiveOverlayView: View {
     let remoteVideoView: UIView?
     let isVideoEnabled: Bool
     let isMuted: Bool
+    let isRemoteAudioMuted: Bool
     let otherUserName: String
     let onCameraSwitch: () -> Void
     let onVideoToggle: () -> Void
-    let onMute: () -> Void
+    let onLocalMute: () -> Void
+    let onRemoteMute: () -> Void
     
     var body: some View {
         VStack(spacing: 0) {
@@ -4044,16 +4451,18 @@ struct LiveOverlayView: View {
                 isRemoteActive: isRemoteActive,
                 isVideoEnabled: isVideoEnabled,
                 isMuted: isMuted,
+                isRemoteAudioMuted: isRemoteAudioMuted,
                 otherUserName: otherUserName,
                 onCameraSwitch: onCameraSwitch,
                 onVideoToggle: onVideoToggle,
-                onMute: onMute
+                onLocalMute: onLocalMute,
+                onRemoteMute: onRemoteMute
             )
             .frame(height: 200)
         }
+        .background(Color.clear)
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(Color("Background Color"))
         .overlay(
             Rectangle()
                 .frame(height: 0.5)
@@ -4074,86 +4483,124 @@ struct LiveVideoContainerView: View {
     let isRemoteActive: Bool
     let isVideoEnabled: Bool
     let isMuted: Bool
+    let isRemoteAudioMuted: Bool
     let otherUserName: String
     let onCameraSwitch: () -> Void
     let onVideoToggle: () -> Void
-    let onMute: () -> Void
+    let onLocalMute: () -> Void
+    let onRemoteMute: () -> Void
     
     var body: some View {
-        HStack(spacing: 12) {
-            // Left side - Local video (You)
-            LiveVideoUserView(
-                videoView: localVideoView,
-                isCurrentUser: true,
-                userName: "You",
-                isActive: isLocalActive,
-                isVideoEnabled: isVideoEnabled
-            )
-            
-            // Right side - Remote video (Other user)
-            LiveVideoUserView(
-                videoView: remoteVideoView,
-                isCurrentUser: false,
-                userName: otherUserName,
-                isActive: isRemoteActive,
-                isVideoEnabled: true // Other user's video state
-            )
-            
-            // Control buttons overlay
-            VStack {
-                Spacer()
-                HStack {
-                    Spacer()
+        GeometryReader { geometry in
+            HStack(spacing: 0) {
+                // Left half - Other person's video
+                ZStack {
+                    LiveVideoUserView(
+                        videoView: remoteVideoView,
+                        isCurrentUser: false,
+                        userName: otherUserName,
+                        isActive: isRemoteActive,
+                        isVideoEnabled: true // Other user's video state
+                    )
                     
-                    // Control buttons
-                    VStack(spacing: 8) {
-                        // Camera flip button
-                        Button(action: {
-                            let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-                            impactFeedback.impactOccurred()
-                            onCameraSwitch()
-                        }) {
-                            Image(systemName: "camera.rotate.fill")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundColor(.white)
-                                .frame(width: 32, height: 32)
-                                .background(Color.black.opacity(0.7))
-                                .clipShape(Circle())
+                    // Mute remote button - bottom left
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Button(action: {
+                                let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+                                impactFeedback.impactOccurred()
+                                // Mute remote user's audio (so we don't hear them)
+                                onRemoteMute()
+                            }) {
+                                Image(systemName: isRemoteAudioMuted ? "speaker.slash.fill" : "speaker.fill")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(.white)
+                                    .frame(width: 36, height: 36)
+                                    .background((isRemoteAudioMuted ? Color("ErrorRed") : Color.black).opacity(0.7))
+                                    .clipShape(Circle())
+                            }
+                            .padding(.leading, 6)
+                            .padding(.bottom, 12)
+                            
+                            Spacer()
                         }
-                        
-                        // Video toggle button
-                        Button(action: {
-                            let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-                            impactFeedback.impactOccurred()
-                            onVideoToggle()
-                        }) {
-                            Image(systemName: isVideoEnabled ? "video.fill" : "video.slash.fill")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundColor(.white)
-                                .frame(width: 32, height: 32)
-                                .background((isVideoEnabled ? Color.black : Color("ErrorRed")).opacity(0.7))
-                                .clipShape(Circle())
-                        }
-                        
-                        // Mute button
-                        Button(action: {
-                            let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
-                            impactFeedback.impactOccurred()
-                            onMute()
-                        }) {
-                            Image(systemName: isMuted ? "mic.slash.fill" : "mic.fill")
-                                .font(.system(size: 14, weight: .medium))
-                                .foregroundColor(.white)
-                                .frame(width: 32, height: 32)
-                                .background((isMuted ? Color("ErrorRed") : Color.black).opacity(0.7))
-                                .clipShape(Circle())
-                        }
-                        
-
                     }
-                    .padding(.trailing, 8)
-                    .padding(.bottom, 8)
                 }
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .frame(width: (geometry.size.width - 12) / 2)
+
+                // Explicit middle gap to avoid any overlay bleed collapsing spacing
+                Spacer()
+                    .frame(width: 12)
+
+                // Right half - Your video
+                ZStack {
+                    LiveVideoUserView(
+                        videoView: localVideoView,
+                        isCurrentUser: true,
+                        userName: "You",
+                        isActive: isLocalActive,
+                        isVideoEnabled: isVideoEnabled
+                    )
+                    
+                    // Your controls - bottom right
+                    VStack {
+                        Spacer()
+                        HStack {
+                            Spacer()
+                            
+                            VStack(spacing: 10) {
+                                // Mic button (top)
+                                Button(action: {
+                                    let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+                                    impactFeedback.impactOccurred()
+                                    // Mute our microphone (so other person doesn't hear us)
+                                    onLocalMute()
+                                }) {
+                                    Image(systemName: isMuted ? "mic.slash.fill" : "mic.fill")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(.white)
+                                        .frame(width: 36, height: 36)
+                                        .background((isMuted ? Color("ErrorRed") : Color.black).opacity(0.7))
+                                        .clipShape(Circle())
+                                }
+                                
+                                // Video toggle button (middle)
+                                Button(action: {
+                                    let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+                                    impactFeedback.impactOccurred()
+                                    onVideoToggle()
+                                }) {
+                                    Image(systemName: isVideoEnabled ? "video.fill" : "video.slash.fill")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(.white)
+                                        .frame(width: 36, height: 36)
+                                        .background((isVideoEnabled ? Color.black : Color("ErrorRed")).opacity(0.7))
+                                        .clipShape(Circle())
+                                }
+                                
+                                // Camera flip button (bottom)
+                                Button(action: {
+                                    let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
+                                    impactFeedback.impactOccurred()
+                                    onCameraSwitch()
+                                }) {
+                                    Image(systemName: "camera.rotate.fill")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(.white)
+                                        .frame(width: 36, height: 36)
+                                        .background(Color.black.opacity(0.7))
+                                        .clipShape(Circle())
+                                }
+                            }
+                            .padding(.trailing, 6)
+                            .padding(.bottom, 12)
+                        }
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .frame(width: (geometry.size.width - 12) / 2)
             }
         }
     }
@@ -4169,13 +4616,15 @@ struct LiveVideoUserView: View {
     
     var body: some View {
         ZStack {
-            // Video container
+            // Full-bleed video container with rounded corners
             RoundedRectangle(cornerRadius: 12)
                 .fill(Color.black)
                 .overlay(
                     Group {
                         if let videoView = videoView, isActive && isVideoEnabled {
                             AgoraVideoViewRepresentable(videoView: videoView)
+                                .aspectRatio(contentMode: .fill)
+                                .clipped()
                                 .cornerRadius(12)
                         } else {
                             // Placeholder when video is off
@@ -4192,26 +4641,40 @@ struct LiveVideoUserView: View {
                     }
                 )
                 .overlay(
-                    // User name label
+                    // User name label - positioned based on user
                     VStack {
-                        Spacer()
                         HStack {
-                            Text(userName)
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Color.black.opacity(0.6))
-                                .cornerRadius(8)
-                                .padding(.leading, 8)
-                                .padding(.bottom, 8)
-                            Spacer()
+                            if !isCurrentUser {
+                                // Other person - left aligned
+                                Text(userName)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Color.black.opacity(0.6))
+                                    .cornerRadius(6)
+                                    .padding(.leading, 6)
+                                    .padding(.top, 12)
+                                Spacer()
+                            } else {
+                                // Current user - right aligned
+                                Spacer()
+                                Text(userName)
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(Color.black.opacity(0.6))
+                                    .cornerRadius(6)
+                                    .padding(.trailing, 6)
+                                    .padding(.top, 12)
+                            }
                         }
+                        Spacer()
                     }
                 )
+                .frame(maxHeight: .infinity)
         }
-        .frame(maxWidth: .infinity)
-        .aspectRatio(0.75, contentMode: .fit) // 4:3 aspect ratio for video
     }
 }
 
@@ -4326,7 +4789,7 @@ struct MarqueeText: View {
                                     AppLogger.log(tag: "LOG-APP: MarqueeText", message: "Measured textWidth: \(textWidth), viewWidth: \(viewWidth) for text: '\(text)'")
                                     startAnimation()
                                 }
-                                .onChange(of: geometry.size.width) { newWidth in
+                                .onChange(of: geometry.size.width) { _, newWidth in
                                     viewWidth = newWidth
                                     startAnimation()
                                 }
@@ -4398,7 +4861,7 @@ struct MarqueeText: View {
                 startAnimation()
             }
         }
-        .onChange(of: text) { _ in
+        .onChange(of: text) { _, _ in
             // Reset and restart when text changes
             animateText = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {

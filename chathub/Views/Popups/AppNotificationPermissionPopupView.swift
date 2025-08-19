@@ -7,15 +7,6 @@ struct AppNotificationPermissionPopupView: View {
     var onAllow: () -> Void
     var onMaybeLater: () -> Void
     
-    // Retry context detection
-    private var isRetryScenario: Bool {
-        AppNotificationPermissionService.shared.shouldShowRetryPopup()
-    }
-    
-    private var retryAttempt: Int {
-        UserDefaults.standard.integer(forKey: "notification_retry_attempt_count")
-    }
-    
     var body: some View {
         ZStack {
             // Background overlay - tap to dismiss with enhanced contrast
@@ -26,115 +17,65 @@ struct AppNotificationPermissionPopupView: View {
                     onMaybeLater()
                 }
             
-            // Main popup content
+            // Main popup container
             VStack(spacing: 0) {
-                // Header section with icon and title
-                VStack(spacing: 16) {
-                    // Notification icon with message context
-                    ZStack {
-                        Circle()
-                            .fill(Color("ColorAccent").opacity(0.1))
-                            .frame(width: 80, height: 80)
-                        
-                        VStack(spacing: 4) {
-                            Image(systemName: "bell.badge.fill")
-                                .font(.system(size: 28, weight: .medium))
-                                .foregroundColor(Color("ColorAccent"))
-                            
-                            Image(systemName: "arrow.up.message.fill")
-                                .font(.system(size: 16, weight: .medium))
-                                .foregroundColor(Color("ColorAccent"))
-                                .opacity(0.7)
-                        }
-                    }
-                    
-                    // Title - Dynamic based on retry context
-                    Text(isRetryScenario ? "Still missing replies? 🔔" : "Great! Your message was sent! 🎉")
-                        .font(.system(size: 22, weight: .bold))
-                        .foregroundColor(Color("dark"))
-                        .multilineTextAlignment(.center)
-                        .padding(.horizontal, 20)
-                }
-                .padding(.top, 32)
-                .padding(.bottom, 24)
+                // Title - matching ConversationLimitPopupView
+                Text("Enable Notifications")
+                    .font(.system(size: 18, weight: .bold))
+                    .foregroundColor(Color("dark"))
+                    .padding(.top, 24)
                 
-                // Explanation section
-                VStack(spacing: 16) {
-                    Text(isRetryScenario ? "Don't miss important messages" : "Stay in the conversation")
-                        .font(.system(size: 18, weight: .semibold))
-                        .foregroundColor(Color("dark"))
-                    
-                    VStack(spacing: 12) {
-                        FeatureRow(
-                            icon: "message.badge.fill",
-                            text: isRetryScenario ? "You've been chatting - get notified when they reply!" : "Get notified when they reply to your message",
-                            color: Color("ColorAccent")
-                        )
-                        
-                        FeatureRow(
-                            icon: "person.badge.plus.fill",
-                            text: "Never miss new friend requests",
-                            color: Color("ColorAccent")
-                        )
-                        
-                        FeatureRow(
-                            icon: "phone.badge.plus.fill",
-                            text: "Instant alerts for incoming calls",
-                            color: Color("ColorAccent")
-                        )
-                    }
-                    .padding(.horizontal, 20)
-                }
-                .padding(.bottom, 32)
+                // Description - matching ConversationLimitPopupView spacing
+                Text("Get notified of new messages and calls so you never miss important conversations.")
+                    .font(.system(size: 14))
+                    .foregroundColor(Color("shade_800"))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+                    .padding(.top, 12)
                 
-                // Action buttons
+                // Button - matching ConversationLimitPopupView style exactly
                 VStack(spacing: 12) {
-                    // Primary button - Allow notifications
+                    // Allow Notifications Button (no arrow, proper height)
                     Button(action: {
                         AppLogger.log(tag: "LOG-APP: NotificationPermissionPopup", message: "allowNotifications() User agreed to allow notifications")
                         triggerHapticFeedback()
                         onAllow()
                     }) {
-                        HStack(spacing: 8) {
-                            Image(systemName: "bell.fill")
-                                .font(.system(size: 16, weight: .medium))
-                            Text("Allow Notifications")
-                                .font(.system(size: 16, weight: .bold))
+                        HStack(spacing: 0) {
+                            // Left side - icon and text (matching ConversationLimitPopupView pattern)
+                            HStack(spacing: 8) {
+                                Image(systemName: "bell.fill")
+                                    .font(.title3)
+                                Text("Allow Notifications")
+                                    .font(.system(size: 14, weight: .bold))
+                            }
+                            .padding(.leading, 8)
+                            
+                            Spacer()
                         }
                         .foregroundColor(.white)
                         .frame(maxWidth: .infinity)
-                        .frame(height: 52)
+                        .frame(minHeight: 56)  // Matching ConversationLimitPopupView height
+                        .padding(.horizontal, 12)  // Matching ConversationLimitPopupView padding
                         .background(
                             RoundedRectangle(cornerRadius: 12)
                                 .fill(Color("ColorAccent"))
                         )
                     }
-                    .padding(.horizontal, 24)
                     
-                    // Secondary button - Maybe later
-                    Button(action: {
-                        AppLogger.log(tag: "LOG-APP: NotificationPermissionPopup", message: "maybeLater() User chose maybe later")
-                        triggerHapticFeedback()
-                        onMaybeLater()
-                    }) {
-                        Text("Maybe Later")
-                            .font(.system(size: 15, weight: .medium))
-                            .foregroundColor(Color("shade7"))
-                            .frame(height: 44)
-                    }
-                    .padding(.horizontal, 24)
+                    // Removed "Maybe Later" button completely
                 }
-                .padding(.bottom, 32)
+                .padding(.horizontal, 24)
+                .padding(.top, 24)
+                .padding(.bottom, 24)
             }
-            .background(
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .fill(Color("shade2"))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 20, style: .continuous)
-                            .stroke(Color.white.opacity(0.15), lineWidth: 1)
-                    )
+            .background(Color("shade2"))  // Matching ConversationLimitPopupView background
+            .clipShape(RoundedRectangle(cornerRadius: 20))
+            .overlay(
+                RoundedRectangle(cornerRadius: 20)
+                    .stroke(Color.white.opacity(0.15), lineWidth: 1.5)  // Matching ConversationLimitPopupView stroke
             )
-            .padding(.horizontal, 32)
+            .padding(.horizontal, 20)
         }
         .animation(.spring(response: 0.6, dampingFraction: 0.8), value: isPresented)
     }
@@ -179,7 +120,7 @@ struct NotificationPermissionPopupView_Previews: PreviewProvider {
                 print("Allow notifications")
             },
             onMaybeLater: {
-                print("Maybe later")
+                print("Maybe later")  // Still needed for background tap dismissal
             }
         )
         .preferredColorScheme(.light)
@@ -190,7 +131,7 @@ struct NotificationPermissionPopupView_Previews: PreviewProvider {
                 print("Allow notifications")
             },
             onMaybeLater: {
-                print("Maybe later")
+                print("Maybe later")  // Still needed for background tap dismissal
             }
         )
         .preferredColorScheme(.dark)

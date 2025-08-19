@@ -86,7 +86,7 @@ class IncomingAudioCallViewModel: NSObject, ObservableObject, AgoraRtcEngineDele
     private func joinChannel() {
         AppLogger.log(tag: "LOG-APP: IncomingAudioCallView", message: "joinChannel() Joining audio channel: \(channelName)")
         
-        let result = agoraKit?.joinChannel(byToken: nil, channelId: channelName, info: nil, uid: UInt(currentUserId.hashValue))
+        let result = agoraKit?.joinChannel(byToken: nil, channelId: channelName, info: nil, uid: UInt(abs(currentUserId.hashValue)))
         if result == 0 {
             AppLogger.log(tag: "LOG-APP: IncomingAudioCallView", message: "joinChannel() Successfully joined channel")
         } else {

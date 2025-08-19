@@ -17,6 +17,7 @@ struct SubscriptionView: View {
     @State private var pricesLoading = true
     @State private var purchaseError: String?
     @State private var showMoreRepliesInfo = false
+    @State private var showHideStatusInfo = false
     
     // Session managers
     private let sessionManager = SessionManager.shared
@@ -62,7 +63,8 @@ struct SubscriptionView: View {
                     "• Unlocks Filters", 
                     "• Unlocks Search",
                     "",
-                    "• Get More Replies ⓘ"
+                    "• Get More Replies ⓘ",
+                    "• Hide Your Status ⓘ"
                 ]
             case .plus:
                 return [
@@ -71,6 +73,7 @@ struct SubscriptionView: View {
                     "• Unlocks Search", 
                     "",
                     "• Get More Replies ⓘ",
+                    "• Hide Your Status ⓘ",
                     "",
                     "• Unlocks Live",
                     "",
@@ -83,6 +86,7 @@ struct SubscriptionView: View {
                     "• Unlocks Search",
                     "",
                     "• Get More Replies ⓘ",
+                    "• Hide Your Status ⓘ",
                     "",
                     "• Unlocks Live",
                     "• Unlocks Calls",
@@ -168,7 +172,8 @@ struct SubscriptionView: View {
                             isLoading: isLoading,
                             pricesLoading: pricesLoading,
                             subscriptionsManager: subscriptionsManager,
-                            showMoreRepliesInfo: $showMoreRepliesInfo
+                            showMoreRepliesInfo: $showMoreRepliesInfo,
+                            showHideStatusInfo: $showHideStatusInfo
                         )
                     }
                 }
@@ -228,10 +233,13 @@ struct SubscriptionView: View {
             .hidden()
         )
         .overlay(
-            // Custom Get More Replies Popup
+            // Custom Popups
             Group {
                 if showMoreRepliesInfo {
                     GetMoreRepliesPopupView(isPresented: $showMoreRepliesInfo)
+                }
+                if showHideStatusInfo {
+                    HideYourStatusPopupView(isPresented: $showHideStatusInfo)
                 }
             }
         )
@@ -567,6 +575,7 @@ struct SubscriptionTierCard: View {
     let pricesLoading: Bool
     let subscriptionsManager: SubscriptionsManagerStoreKit2
     @Binding var showMoreRepliesInfo: Bool
+    @Binding var showHideStatusInfo: Bool
     
     // Session managers for subscription state
     private let subscriptionSessionManager = SubscriptionSessionManager.shared
@@ -710,6 +719,25 @@ struct SubscriptionTierCard: View {
                                 
                                 Button(action: {
                                     showMoreRepliesInfo = true
+                                }) {
+                                    Image(systemName: "info.circle.fill")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundColor(.white.opacity(0.8))
+                                }
+                                .buttonStyle(PlainButtonStyle())
+                                
+                                Spacer()
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        } else if feature.contains("Hide Your Status ⓘ") {
+                            // Interactive feature with info icon
+                            HStack(spacing: 8) {
+                                Text("• Hide Your Status")
+                                    .font(.system(size: 15, weight: .medium))
+                                    .foregroundColor(.white)
+                                
+                                Button(action: {
+                                    showHideStatusInfo = true
                                 }) {
                                     Image(systemName: "info.circle.fill")
                                         .font(.system(size: 14, weight: .medium))

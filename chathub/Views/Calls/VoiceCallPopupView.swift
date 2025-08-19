@@ -8,6 +8,19 @@ struct VoiceCallPopupView: View {
     
     var onSubscribe: () -> Void
     
+    // Pricing information for Pro subscription
+    private func getProSubscriptionPrice() -> String? {
+        let subscriptionsManager = SubscriptionsManagerStoreKit2.shared
+        let productId = "com.peppty.ChatApp.pro.weekly" // Use weekly for pricing display
+        
+        if let cachedPrice = subscriptionsManager.getCachedFormattedPrice(productId: productId, period: "weekly") {
+            return cachedPrice
+        }
+        
+        AppLogger.log(tag: "LOG-APP: VoiceCallPopupView", message: "getProSubscriptionPrice() No cached price available for Pro subscription")
+        return nil
+    }
+    
     var body: some View {
         ZStack {
             // Background overlay - dark semi-transparent tap to dismiss
@@ -20,96 +33,109 @@ struct VoiceCallPopupView: View {
             
             // Main popup container
             VStack {
-                Spacer() // Center vertically
+                Spacer()
                 
-                // Popup content
                 VStack(spacing: 0) {
-                    // Title
-                    Text("Unlock Voice Calls")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(Color("dark"))
-                        .multilineTextAlignment(.center)
-                        .padding(.top, 16)
-                    
-                    // Description text
-                    Text("To make voice calls, you need ChatHub Plus or Pro Subscription. Upgrade now to enjoy unlimited voice calls and other premium features.")
-                        .font(.system(size: 14))
-                        .foregroundColor(Color("shade_800"))
-                        .multilineTextAlignment(.center)
-                        .lineSpacing(4)
-                        .padding(.horizontal, 32)
-                        .padding(.top, 16)
-                        .padding(.bottom, 24)
-                    
-                    // Subscribe Button (Plus subscription)
-                    Button(action: {
-                        AppLogger.log(tag: "LOG-APP: VoiceCallPopupView", message: "subscribeButtonTapped() Subscribe button tapped")
-                        onSubscribe()
-                        isPresented = false
-                    }) {
-                        HStack(spacing: 12) {
-                            Image("buy")
-                                .renderingMode(.template)
-                                .resizable()
-                                .aspectRatio(contentMode: .fit)
-                                .foregroundColor(.white)
-                                .frame(width: 18, height: 18)
-                            
-                            VStack(spacing: 2) {
-                                Text("SUBSCRIBE TO CHATHUB PLUS")
-                                    .font(.system(size: 14, weight: .bold))
-                                    .foregroundColor(.white)
-                                
-                                if let price = getPlusSubscriptionPrice(), !price.isEmpty {
-                                    Text(price)
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundColor(.white.opacity(0.9))
-                                }
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .frame(minHeight: 56)
-                        .padding(.horizontal, 12)
-                        .background(
-                            LinearGradient(
-                                colors: [Color("plusGradientStart"), Color("plusGradientEnd")],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                        )
-                        .cornerRadius(12)
+                    // Static title and description - refined hierarchy
+                    VStack(spacing: 12) {
+                        Text("Unlock Voice Calls")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundColor(Color("dark"))
+                            .multilineTextAlignment(.center)
+                        
+                        Text("To make voice calls, you need ChatHub Pro subscription. Upgrade now to enjoy unlimited voice calls.")
+                            .font(.system(size: 14))
+                            .foregroundColor(Color("shade_800"))
+                            .multilineTextAlignment(.center)
                     }
                     .padding(.horizontal, 24)
-                    .padding(.bottom, 5)
+                    .padding(.top, 24)
+                    
+                    // Buttons
+                    VStack(spacing: 12) {
+                        // Lite Subscription Button with matching gradient
+                        Button(action: {
+                            AppLogger.log(tag: "LOG-APP: VoiceCallPopupView", message: "subscribeButtonTapped() Subscribe button tapped")
+                            onSubscribe()
+                            isPresented = false
+                        }) {
+                            HStack(spacing: 0) {
+                                // Left side - icon and text (always consistent)
+                                HStack(spacing: 8) {
+                                    Image(systemName: "star.circle.fill")
+                                        .font(.title3)
+                                    Text("Subscribe to Pro")
+                                        .font(.system(size: 14, weight: .bold))
+                                }
+                                .padding(.leading, 8)
+                                
+                                Spacer()
+                                
+                                // Right side - pricing when available with pill background, invisible text when not
+                                if let price = getProSubscriptionPrice() {
+                                    Text("\(price)/week")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .foregroundColor(.white)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(
+                                            RoundedRectangle(cornerRadius: 10)
+                                                .fill(Color.white.opacity(0.25))
+                                        )
+                                        .padding(.trailing, 8)
+                                } else {
+                                    // Invisible text to maintain button height consistency
+                                    Text("$0.00/week")
+                                        .font(.system(size: 12, weight: .medium))
+                                        .opacity(0)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .padding(.trailing, 8)
+                                }
+                            }
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity)
+                            .frame(minHeight: 56)
+                            .padding(.horizontal, 12)
+                            .background(
+                                LinearGradient(
+                                    colors: [Color("proGradientStart"), Color("proGradientEnd")],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .cornerRadius(12)
+                        }
+                    }
+                    .padding(.horizontal, 24)
+                    .padding(.top, 24)
+                    .padding(.bottom, 24)
                 }
-                .frame(maxWidth: .infinity)
-                .padding(.top, 24)
-                .padding(.bottom, 24)
                 .background(
                     RoundedRectangle(cornerRadius: 20, style: .continuous)
                         .fill(Color("shade2"))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .stroke(Color.white.opacity(0.15), lineWidth: 1)
+                        )
+
                 )
-                .padding(.horizontal, 24)
-                .transition(.scale.combined(with: .opacity))
-                .animation(.spring(response: 0.35, dampingFraction: 0.8), value: isPresented)
+                .padding(.horizontal, 20)
                 
-                Spacer() // Center vertically
+                Spacer()
             }
         }
         .onAppear {
             AppLogger.log(tag: "LOG-APP: VoiceCallPopupView", message: "onAppear() Popup displayed")
+            
+            // Track pricing display if available
+            if let price = getProSubscriptionPrice() {
+                AppLogger.log(tag: "LOG-APP: VoiceCallPopupView", message: "Pricing displayed: \(price)")
+            }
         }
         .onDisappear {
             AppLogger.log(tag: "LOG-APP: VoiceCallPopupView", message: "onDisappear() Popup dismissed")
         }
-    }
-    
-    // MARK: - Helper Methods
-    
-    private func getPlusSubscriptionPrice() -> String? {
-        // TODO: Implement proper price fetching from actual App Store Connect pricing
-        // Return nil if no price is available
-        return nil // No default price
     }
 }
 

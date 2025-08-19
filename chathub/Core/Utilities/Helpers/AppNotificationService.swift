@@ -49,7 +49,7 @@ class AppNotificationService: NSObject {
         }
         
         let tokenData: [String: Any] = [
-            "device_token": token,
+            "User_device_token": token,  // Use same field name as Android for consistency
             "token_updated_at": Date(),
             "platform": "ios"
         ]
@@ -68,14 +68,44 @@ class AppNotificationService: NSObject {
     func handleNotification(_ userInfo: [AnyHashable: Any]) {
         AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "handleNotification() Handling notification: \(userInfo)")
         
+        // Handle FCM notifications (sent from Firebase Cloud Functions)
+        if let source = userInfo["source"] as? String, source == "fcm" {
+            AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "handleNotification() Processing FCM notification")
+            
+            let senderId = userInfo["sender_id"] as? String ?? ""
+            let title = userInfo["title"] as? String ?? ""
+            let body = userInfo["body"] as? String ?? ""
+            
+            AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "handleNotification() FCM data - senderId: \(senderId), title: \(title), body: \(body)")
+            
+            // For FCM notifications, the chat navigation is based on sender_id
+            if !senderId.isEmpty {
+                handleMessageNotification(chatId: "", senderId: senderId)
+            }
+            return
+        }
+        
+        // Handle other notification formats (legacy/APNS)
         guard let data = userInfo["data"] as? [String: Any] else {
-            AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "handleNotification() No data found in notification")
+            AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "handleNotification() No data found in notification, checking for direct fields")
+            
+            // Check for direct notification fields (for FCM/APNS notifications)
+            let senderId = userInfo["sender_id"] as? String ?? ""
+            let _ = userInfo["title"] as? String ?? ""
+            let _ = userInfo["body"] as? String ?? ""
+            
+            if !senderId.isEmpty {
+                AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "handleNotification() Found direct notification fields - senderId: \(senderId)")
+                handleMessageNotification(chatId: "", senderId: senderId)
+            }
             return
         }
         
         let type = data["type"] as? String ?? ""
         let chatId = data["chat_id"] as? String ?? ""
         let senderId = data["sender_id"] as? String ?? ""
+        
+        AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "handleNotification() Legacy format - type: \(type), chatId: \(chatId), senderId: \(senderId)")
         
         switch type {
         case "message":
@@ -131,7 +161,7 @@ class AppNotificationService: NSObject {
                     let profileImage = data?["profile_image"] as? String ?? ""
                     let gender = data?["gender"] as? String ?? ""
                     
-                    let chat = Chat(
+                    let _ = Chat(
                         ChatId: chatId,
                         UserId: senderId,
                         ProfileImage: profileImage,
@@ -173,7 +203,11 @@ class AppNotificationService: NSObject {
                     let badgeCount = snapshot.documents.count
                     
                     DispatchQueue.main.async {
-                        UIApplication.shared.applicationIconBadgeNumber = badgeCount
+                        if #available(iOS 16.0, *) {
+                            UNUserNotificationCenter.current().setBadgeCount(badgeCount)
+                        } else {
+                            UIApplication.shared.applicationIconBadgeNumber = badgeCount
+                        }
                         AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "updateBadgeCount() Badge count updated to: \(badgeCount)")
                     }
                 }
@@ -184,7 +218,112 @@ class AppNotificationService: NSObject {
         AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "clearBadge() Clearing badge")
         
         DispatchQueue.main.async {
-            UIApplication.shared.applicationIconBadgeNumber = 0
+            if #available(iOS 16.0, *) {
+                UNUserNotificationCenter.current().setBadgeCount(0)
+            } else {
+                UIApplication.shared.applicationIconBadgeNumber = 0
+            }
+        }
+    }
+    
+    // MARK: - FCM Message Handling (called by AppDelegate MessagingDelegate)
+    
+    /// Handle FCM messages received from Firebase Cloud Functions
+    /// This is the centralized handler for all FCM message processing (iOS equivalent to Android onMessageReceived)
+    func handleFCMMessage(_ data: [AnyHashable: Any]) {
+        AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "handleFCMMessage() Processing FCM message")
+        AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "handleFCMMessage() Full message data: \(data)")
+        
+        // Try to extract data from different FCM message structures
+        var senderId: String?
+        var title: String?
+        var body: String?
+        var source: String?
+        
+        // First, check if there's a 'data' field (new FCM format)
+        if let fcmData = data["data"] as? [String: Any] {
+            AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "handleFCMMessage() Found 'data' field in FCM message")
+            senderId = fcmData["sender_id"] as? String
+            title = fcmData["title"] as? String
+            body = fcmData["body"] as? String
+            source = fcmData["source"] as? String
+        } else {
+            // Fallback to direct fields (legacy format)
+            AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "handleFCMMessage() No 'data' field found, checking direct fields")
+            senderId = data["sender_id"] as? String
+            title = data["title"] as? String
+            body = data["body"] as? String
+            source = data["source"] as? String
+        }
+        
+        AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "handleFCMMessage() Extracted - sender_id: \(senderId ?? "nil"), title: \(title ?? "nil"), body: \(body ?? "nil"), source: \(source ?? "nil")")
+        
+        // Validate that this is an FCM message from our cloud function
+        if source == "fcm" {
+            AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "handleFCMMessage() Confirmed FCM message from cloud function")
+        } else {
+            AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "handleFCMMessage() Warning: source field is not 'fcm', might be legacy message")
+        }
+        
+        if let senderId = senderId,
+           let title = title,
+           let body = body {
+            
+            // Check notification permission before showing notification
+            UNUserNotificationCenter.current().getNotificationSettings { settings in
+                if settings.authorizationStatus == .authorized {
+                    AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "handleFCMMessage() notification permission granted, showing notification")
+                    
+                    // Create and show local notification (iOS equivalent to Android NotificationManager)
+                    self.showNotificationFromFCM(
+                        senderId: senderId,
+                        title: title,
+                        body: body
+                    )
+                } else {
+                    AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "handleFCMMessage() notification permission not granted, status: \(settings.authorizationStatus.rawValue)")
+                }
+            }
+        } else {
+            AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "handleFCMMessage() missing required notification data - sender_id: \(senderId ?? "nil"), title: \(title ?? "nil"), body: \(body ?? "nil")")
+        }
+    }
+    
+    /// Display notification from FCM data (iOS equivalent to Android NotificationManager)
+    private func showNotificationFromFCM(senderId: String, title: String, body: String) {
+        AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "showNotificationFromFCM() Creating notification for sender: \(senderId)")
+        
+        // Create notification content
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        
+        // Add custom data for notification tap handling (same structure as Android)
+        content.userInfo = [
+            "sender_id": senderId,
+            "title": title,
+            "body": body,
+            "source": "fcm"
+        ]
+        
+        // Create notification ID using sender_id hash (same as Android)
+        let notificationIdentifier = String(senderId.hashValue)
+        
+        // Create notification request
+        let request = UNNotificationRequest(
+            identifier: notificationIdentifier,
+            content: content,
+            trigger: nil // Show immediately
+        )
+        
+        // Add notification to notification center
+        UNUserNotificationCenter.current().add(request) { error in
+            if let error = error {
+                AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "showNotificationFromFCM() notification display error: \(error.localizedDescription)")
+            } else {
+                AppLogger.log(tag: "LOG-APP: AppNotificationService", message: "showNotificationFromFCM() notification displayed successfully for sender: \(senderId)")
+            }
         }
     }
     

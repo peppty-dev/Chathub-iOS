@@ -106,6 +106,7 @@ struct ProfileView: View {
     // New Popup States (Android Parity - Using specific popups)
     @State private var showVoiceCallPopup = false
     @State private var showVideoCallPopup = false
+    @State private var showNotificationPermissionPopup = false
     
     // MARK: - Conversation Flow Tracking
     @State private var conversationFlowSessionId: String?
@@ -160,6 +161,47 @@ struct ProfileView: View {
                     isPresented: $showVideoCallPopup,
                     onSubscribe: { navigateToSubscription() }
                 )
+            }
+            
+            // Notification Permission popup overlay
+            if showNotificationPermissionPopup {
+                AppNotificationPermissionPopupView(
+                    isPresented: $showNotificationPermissionPopup,
+                    onAllow: {
+                        AppLogger.log(tag: "LOG-APP: ProfileView", message: "notificationPermissionPopup onAllow() User agreed to allow notifications")
+                        
+                        // Close custom popup immediately
+                        showNotificationPermissionPopup = false
+                        
+                        // Wait for custom popup to fully close before showing system popup
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                            // Clean approach: Request iOS permission and update FCM token in one step
+                            FCMTokenUpdateService.shared.requestPermissionAndUpdateToken(
+                                context: "profile_notification_popup"
+                            ) { success in
+                                AppLogger.log(tag: "LOG-APP: ProfileView", message: "notificationPermissionPopup Permission request and FCM token update completed: \(success)")
+                                
+                                if success {
+                                    // Reset retry mechanism on success
+                                    AppNotificationPermissionService.shared.resetRetryMechanism()
+                                    AppLogger.log(tag: "LOG-APP: ProfileView", message: "notificationPermissionPopup Notification setup completed successfully")
+                                }
+                            }
+                        }
+                    },
+                    onMaybeLater: {
+                        AppLogger.log(tag: "LOG-APP: ProfileView", message: "notificationPermissionPopup onMaybeLater() User chose maybe later")
+                        
+                        // Handle "maybe later" with retry mechanism
+                        AppNotificationPermissionService.shared.handleMaybeLaterResponse(context: "start_chat_button")
+                        
+                        showNotificationPermissionPopup = false
+                        
+                        // Proceed with chat creation anyway
+                        proceedAfterNotificationPermission()
+                    }
+                )
+                .zIndex(1000) // Ensure it appears above all other content
             }
 
             // Enhanced toast overlay
@@ -379,6 +421,11 @@ struct ProfileView: View {
         if showVideoCallPopup {
             AppLogger.log(tag: "LOG-APP: ProfileView", message: "cleanupPopupStates() Resetting video call popup state")
             showVideoCallPopup = false
+        }
+        
+        if showNotificationPermissionPopup {
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "cleanupPopupStates() Resetting notification permission popup state")
+            showNotificationPermissionPopup = false
         }
         
         // Reset any other modal states
@@ -2059,6 +2106,13 @@ struct ProfileView: View {
             return
         }
         
+        // For new conversations - First check if we should show notification permission popup
+        if shouldShowNotificationPermissionPopup() {
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleConversationStart() Showing notification permission popup before chat")
+            showNotificationPermissionPopup = true
+            return
+        }
+        
         // For new conversations - Check conversation limits using always-show popup strategy
         AppLogger.log(tag: "LOG-APP: ProfileView", message: "handleConversationStart() New conversation - checking limits")
         
@@ -2610,6 +2664,53 @@ struct ProfileView: View {
         }
     }
 
+    // MARK: - Notification Permission Logic
+    private func shouldShowNotificationPermissionPopup() -> Bool {
+        // Don't show if permission already requested/granted
+        guard AppNotificationPermissionService.shared.shouldRequestPermission() else {
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "shouldShowNotificationPermissionPopup() Permission already requested or granted")
+            return false
+        }
+        
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "shouldShowNotificationPermissionPopup() Should show notification permission popup")
+        return true
+    }
+    
+    private func proceedAfterNotificationPermission() {
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "proceedAfterNotificationPermission() Continuing with conversation flow after notification permission")
+        
+        // Continue with the conversation flow
+        let limitCheckStartTime = Date()
+        let result = ConversationLimitManagerNew.shared.checkConversationLimit()
+        
+        // Log limit check result with structured logging
+        if let flowId = conversationFlowSessionId {
+            ConversationFlowLogger.shared.logLimitCheck(
+                flowId: flowId,
+                result: result,
+                userType: determineUserType()
+            )
+        }
+        
+        // Track conversation button tap
+        ConversationAnalytics.shared.trackConversationButtonTapped(
+            userType: ConversationAnalytics.shared.getUserType(),
+            currentUsage: result.currentUsage,
+            limit: result.limit,
+            isLimitReached: result.isLimitReached
+        )
+        
+        if result.showPopup {
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "proceedAfterNotificationPermission() Showing conversation limit popup")
+            conversationLimitResult = result
+            showConversationLimitPopup = true
+        } else {
+            // ONLY Plus+ subscribers and new users proceed directly without popup AND without algorithm
+            AppLogger.log(tag: "LOG-APP: ProfileView", message: "proceedAfterNotificationPermission() Plus+/New user - bypassing popup AND algorithm")
+            incrementUsageAndProceedWithRouting()
+        }
+    }
+
     // MARK: - Profile View Notification
     private func sendProfileViewNotification() {
         let time = Int64(Date().timeIntervalSince1970)
@@ -3076,7 +3177,6 @@ struct ProfileView: View {
             showToast = true
         }
     }
-
 
 }
 

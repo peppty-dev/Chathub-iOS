@@ -11,9 +11,11 @@ class LiveCallManager: NSObject, ObservableObject, AgoraRtcEngineDelegate {
     @Published var remoteVideoView: UIView? = nil
     @Published var isVideoEnabled: Bool = true
     @Published var isMuted: Bool = false
+    @Published var isRemoteAudioMuted: Bool = false
     
     private var agoraEngine: AgoraRtcEngineKit? = nil
     private let appId = "8173040ab4524a64a1051a44026b9677"
+    private let sessionManager = SessionManager.shared
     
     var onRemoteUserJoined: ((UInt) -> Void)?
     var onRemoteUserLeft: ((UInt) -> Void)?
@@ -43,7 +45,9 @@ class LiveCallManager: NSObject, ObservableObject, AgoraRtcEngineDelegate {
         // FIX: AgoraRtcEngineKit.sharedEngine returns non-optional, no guard let needed
         let engine = AgoraRtcEngineKit.sharedEngine(with: config, delegate: self)
         agoraEngine = engine
-        agoraEngine?.setChannelProfile(.communication)
+        // CROSS-PLATFORM FIX: Use .liveBroadcasting to match Android's CHANNEL_PROFILE_LIVE_BROADCASTING for direct video
+        agoraEngine?.setChannelProfile(.liveBroadcasting)
+        agoraEngine?.setClientRole(.broadcaster)
         agoraEngine?.enableAudio()
         agoraEngine?.enableVideo()
         agoraEngine?.enableAudioVolumeIndication(250, smooth: 3, reportVad: true)
@@ -105,10 +109,18 @@ class LiveCallManager: NSObject, ObservableObject, AgoraRtcEngineDelegate {
     }
     
     func joinLiveChannel(chatId: String) {
-        let channelName = "live_\(chatId)"
-        agoraEngine?.joinChannel(byToken: nil, channelId: channelName, info: nil, uid: 0) { [weak self] (channel, uid, elapsed) in
+        // CROSS-PLATFORM FIX: Use chatId directly to match Android direct video channel naming
+        // Android uses CHATID directly, so iOS should use the same for compatibility
+        let channelName = chatId
+        
+        // CROSS-PLATFORM FIX: Use sessionManager.userId.hashValue to match Android's sessionManager.getUserID().hashCode()
+        // Use abs() to handle negative hash values since UInt cannot represent negative numbers
+        let userId = UInt(abs(sessionManager.userId?.hashValue ?? 0))
+        
+        AppLogger.log(tag: "LOG-APP: LiveCallManager", message: "joinLiveChannel() CROSS-PLATFORM: Using channel name '\(channelName)' and user ID '\(userId)' to match Android direct video")
+        agoraEngine?.joinChannel(byToken: nil, channelId: channelName, info: nil, uid: userId) { [weak self] (channel, uid, elapsed) in
             guard let _ = self else { return }
-            AppLogger.log(tag: "LOG-APP: LiveCallManager", message: "joinLiveChannel() Joined channel: \(channel), uid: \(uid)")
+            AppLogger.log(tag: "LOG-APP: LiveCallManager", message: "joinLiveChannel() ✅ CROSS-PLATFORM SUCCESS: Joined channel: \(channel), uid: \(uid)")
         }
     }
     
@@ -136,6 +148,13 @@ class LiveCallManager: NSObject, ObservableObject, AgoraRtcEngineDelegate {
         // Toggle local audio mute
         isMuted.toggle()
         agoraEngine?.muteLocalAudioStream(isMuted)
+    }
+    
+    func toggleRemoteAudioMute() {
+        AppLogger.log(tag: "LOG-APP: LiveCallManager", message: "toggleRemoteAudioMute() Toggling remote audio mute")
+        // Toggle remote audio playback mute
+        isRemoteAudioMuted.toggle()
+        agoraEngine?.muteAllRemoteAudioStreams(isRemoteAudioMuted)
     }
     
     

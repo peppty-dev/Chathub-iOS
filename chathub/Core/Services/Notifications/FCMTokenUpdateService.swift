@@ -15,29 +15,43 @@ class FCMTokenUpdateService {
     func requestPermissionAndUpdateToken(context: String, completion: @escaping (Bool) -> Void) {
         AppLogger.log(tag: "LOG-APP: FCMTokenUpdateService", message: "requestPermissionAndUpdateToken() context: \(context)")
         
-        // Check if we already have a real FCM token
-        if let currentToken = SessionManager.shared.deviceToken,
-           !currentToken.contains("ios_pending_notification_permission") {
-            AppLogger.log(tag: "LOG-APP: FCMTokenUpdateService", message: "requestPermissionAndUpdateToken() already have real FCM token")
-            completion(true)
-            return
-        }
-        
-        // Request notification permission first
-        AppNotificationPermissionService.shared.requestNotificationPermissionWithContext(
-            context: context
-        ) { [weak self] granted in
-            guard let self = self else { 
-                completion(false)
-                return 
+        // Check if notification permission should be requested
+        // Don't skip based on token - check actual permission status
+        AppNotificationPermissionService.shared.checkPermissionStatus { status in
+            // If permission is already granted, just update the token
+            if status == .authorized {
+                AppLogger.log(tag: "LOG-APP: FCMTokenUpdateService", message: "requestPermissionAndUpdateToken() permission already authorized")
+                self.updateFCMToken { success in
+                    completion(success)
+                }
+                return
             }
             
-            AppLogger.log(tag: "LOG-APP: FCMTokenUpdateService", message: "requestPermissionAndUpdateToken() permission granted: \(granted)")
+            // If permission should not be requested (already asked before), just update token
+            if !AppNotificationPermissionService.shared.shouldRequestPermission() {
+                AppLogger.log(tag: "LOG-APP: FCMTokenUpdateService", message: "requestPermissionAndUpdateToken() permission already requested before, updating token only")
+                self.updateFCMToken { success in
+                    completion(success)
+                }
+                return
+            }
             
-            // Get FCM token regardless of permission result
-            // This ensures we have the best possible token for the user
-            self.updateFCMToken { success in
-                completion(success)
+            // Request notification permission first
+            AppNotificationPermissionService.shared.requestNotificationPermissionWithContext(
+                context: context
+            ) { [weak self] granted in
+                guard let self = self else { 
+                    completion(false)
+                    return 
+                }
+                
+                AppLogger.log(tag: "LOG-APP: FCMTokenUpdateService", message: "requestPermissionAndUpdateToken() permission granted: \(granted)")
+                
+                // Get FCM token regardless of permission result
+                // This ensures we have the best possible token for the user
+                self.updateFCMToken { success in
+                    completion(success)
+                }
             }
         }
     }

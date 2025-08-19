@@ -465,6 +465,153 @@ class ProfanityClass {
         
         AppLogger.log(tag: "LOG-APP: ProfanityClass", message: "refreshProfanityWords() completed - profanitySet size: \(profanitySet.count), profanitySetAppNames size: \(profanitySetAppNames.count)")
     }
+    
+    // MARK: - Enhanced Methods with Elongation Support
+    
+    /// Remove profane words from text but keep clean words for interest extraction
+    /// Uses elongation normalization for better detection
+    func removeProfaneWordsOnly(_ text: String) -> String {
+        AppLogger.log(tag: "LOG-APP: ProfanityClass", message: "removeProfaneWordsOnly() input: '\(text)'")
+        
+        // Skip for premium users
+        if sessionManager.isUserSubscribedToPro() {
+            return text
+        }
+        
+        guard !text.isEmpty, !profanitySet.isEmpty else {
+            return text
+        }
+        
+        // Check cache first
+        let cacheKey = "removeProfaneOnly_\(text)" as NSString
+        if let cached = removeProfanityCache.object(forKey: cacheKey) {
+            return cached as String
+        }
+        
+        // Tokenize the text to work on individual words
+        let words = text.components(separatedBy: .whitespacesAndNewlines)
+        var cleanWords: [String] = []
+        
+        for word in words {
+            let trimmedWord = word.trimmingCharacters(in: .punctuationCharacters.union(.whitespaces))
+            
+            if trimmedWord.isEmpty {
+                cleanWords.append(word) // Keep original spacing/punctuation
+                continue
+            }
+            
+            // Normalize elongation before checking profanity
+            let normalizedWord = normalizeElongationForProfanity(trimmedWord)
+            
+            // Check if normalized word is profane
+            if isProfaneWord(normalizedWord) {
+                AppLogger.log(tag: "LOG-APP: ProfanityClass", message: "removeProfaneWordsOnly() removed profane word: '\(word)' (normalized: '\(normalizedWord)')")
+                // Skip this word (remove it)
+                continue
+            } else {
+                cleanWords.append(word) // Keep the word
+            }
+        }
+        
+        let result = cleanWords.joined(separator: " ")
+        
+        // Cache the result
+        removeProfanityCache.setObject(result as NSString, forKey: cacheKey)
+        
+        AppLogger.log(tag: "LOG-APP: ProfanityClass", message: "removeProfaneWordsOnly() result: '\(result)'")
+        return result
+    }
+    
+    /// Enhanced profanity detection with elongation normalization
+    func doesContainProfanityWithElongation(_ text: String) -> Bool {
+        AppLogger.log(tag: "LOG-APP: ProfanityClass", message: "doesContainProfanityWithElongation() input: '\(text)'")
+        
+        // Skip for premium users
+        if sessionManager.isUserSubscribedToPro() {
+            return false
+        }
+        
+        guard !text.isEmpty, !profanitySet.isEmpty else {
+            return false
+        }
+        
+        // Check cache first
+        let cacheKey = "containsElongated_\(text)" as NSString
+        if let cached = containsProfanityCache.object(forKey: cacheKey) {
+            return cached.boolValue
+        }
+        
+        // Check individual words with elongation normalization
+        let words = text.components(separatedBy: .whitespacesAndNewlines)
+        
+        for word in words {
+            let trimmedWord = word.trimmingCharacters(in: .punctuationCharacters.union(.whitespaces))
+            
+            if trimmedWord.isEmpty { continue }
+            
+            // Normalize elongation before checking profanity
+            let normalizedWord = normalizeElongationForProfanity(trimmedWord)
+            
+            if isProfaneWord(normalizedWord) {
+                AppLogger.log(tag: "LOG-APP: ProfanityClass", message: "doesContainProfanityWithElongation() found profane word: '\(word)' (normalized: '\(normalizedWord)')")
+                
+                // Cache the result
+                containsProfanityCache.setObject(NSNumber(value: true), forKey: cacheKey)
+                return true
+            }
+        }
+        
+        // Cache the result
+        containsProfanityCache.setObject(NSNumber(value: false), forKey: cacheKey)
+        return false
+    }
+    
+    /// Normalize elongated words for profanity detection (similar to interest extraction)
+    private func normalizeElongationForProfanity(_ word: String) -> String {
+        let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        
+        // Multi-pass normalization to handle elongation anywhere in the word
+        var normalized = trimmed
+        var previousNormalized = ""
+        var passCount = 0
+        
+        // Keep normalizing until no more changes (handles complex cases)
+        while normalized != previousNormalized && passCount < 5 {
+            previousNormalized = normalized
+            passCount += 1
+            
+            // Replace all instances of 3+ consecutive identical characters with single character
+            let consecutivePattern = "(.)\\1{2,}"
+            if let regex = try? NSRegularExpression(pattern: consecutivePattern, options: []) {
+                let range = NSRange(location: 0, length: normalized.utf16.count)
+                normalized = regex.stringByReplacingMatches(in: normalized, options: [], range: range, withTemplate: "$1")
+            }
+        }
+        
+        return normalized
+    }
+    
+    /// Check if a single word is profane (helper method)
+    private func isProfaneWord(_ word: String) -> Bool {
+        let lowerWord = word.lowercased()
+        
+        // Direct lookup first
+        if profanitySet.contains(lowerWord) {
+            return true
+        }
+        
+        // Pattern-based checking for partial matches
+        for profaneWord in profanitySet {
+            if !profaneWord.isEmpty {
+                // Check if profane word is contained in the input word
+                if lowerWord.contains(profaneWord.lowercased()) {
+                    return true
+                }
+            }
+        }
+        
+        return false
+    }
 }
 
 // MARK: - Convenience Typealias for iOS Compatibility

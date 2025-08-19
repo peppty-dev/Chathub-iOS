@@ -416,12 +416,12 @@ class AppDelegate: UIResponder, UIApplicationDelegate, MessagingDelegate {
 			return 
 		}
 		
-		AppLogger.log(tag: "LOG-APP: AppDelegate", message: "didReceiveRegistrationToken() FCM token received successfully")
+		AppLogger.log(tag: "LOG-APP: AppDelegate", message: "didReceiveRegistrationToken() FCM token received - deferring update until user grants notification permission")
 		
-		// ANDROID PARITY: Use FCMTokenUpdateService like Android FirebaseMessagingService.onNewToken()
-		FCMTokenUpdateService.shared.handleTokenRefresh(newToken: fcmToken)
+		// CLEANER APPROACH: Only update FCM token after user grants permission
+		// This prevents premature token updates before user consent
 		
-		// Also notify AppNotificationService for token management
+		// Still notify AppNotificationService for token management (without database update)
 		AppNotificationService.shared.handleReceivedRegistrationToken(fcmToken)
 		
 		// Keep legacy notification for backward compatibility
@@ -432,7 +432,18 @@ class AppDelegate: UIResponder, UIApplicationDelegate, MessagingDelegate {
 			userInfo: dataDict
 		)
 		
-		AppLogger.log(tag: "LOG-APP: AppDelegate", message: "didReceiveRegistrationToken() FCM token processed by FCMTokenUpdateService and AppNotificationService")
+		AppLogger.log(tag: "LOG-APP: AppDelegate", message: "didReceiveRegistrationToken() FCM token cached but not saved - waiting for user permission")
+	}
+	
+	//CRITICAL FIX: This function is called when FCM receives a message from Firebase Cloud Functions
+	//This is the iOS equivalent to Android FirebaseMessagingService.onMessageReceived()
+	//ARCHITECTURAL IMPROVEMENT: Delegate all processing to AppNotificationService for centralized handling
+	func messaging(_ messaging: Messaging, didReceive remoteMessage: [AnyHashable: Any]) {
+		AppLogger.log(tag: "LOG-APP: AppDelegate", message: "messaging didReceive() FCM message received - delegating to AppNotificationService")
+		
+		// CLEAN ARCHITECTURE: Delegate all FCM message processing to AppNotificationService
+		// This keeps AppDelegate minimal and centralizes notification logic
+		AppNotificationService.shared.handleFCMMessage(remoteMessage)
 	}
 
 	//This function is called when the app receives a remote notification. It can handle the notification payload and perform a background fetch if needed.

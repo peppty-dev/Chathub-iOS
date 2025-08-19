@@ -45,7 +45,7 @@ struct DebugSubscriptionPopupView: View {
                             .multilineTextAlignment(.center)
                         
                         // Subtitle - following guidelines
-                        Text("This is a debug-only feature for testing different subscription states")
+                        Text("This is a debug-only feature for testing different subscription states.\n\nChanging subscription will reset all live feature and call timers, giving you full time allocations to test with.")
                             .font(.system(size: 14))
                             .foregroundColor(Color("shade_800"))
                             .multilineTextAlignment(.center)
@@ -91,6 +91,54 @@ struct DebugSubscriptionPopupView: View {
                                 Text(currentState.isActive ? "Yes" : "No")
                                     .font(.system(size: 14, weight: .bold))
                                     .foregroundColor(currentState.isActive ? Color("green_500") : Color("red_500"))
+                            }
+                            
+                            // Timer status section for debug purposes
+                            VStack(spacing: 6) {
+                                Rectangle()
+                                    .fill(Color("shade_300"))
+                                    .frame(height: 1)
+                                    .padding(.vertical, 8)
+                                
+                                HStack {
+                                    Text("Live Time:")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundColor(Color("shade_800"))
+                                    Spacer()
+                                    Text("\(MessagingSettingsSessionManager.shared.liveSeconds)s")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundColor(Color("dark"))
+                                }
+                                
+                                HStack {
+                                    Text("Call Time:")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundColor(Color("shade_800"))
+                                    Spacer()
+                                    Text("\(MessagingSettingsSessionManager.shared.callSeconds)s")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundColor(Color("dark"))
+                                }
+                                
+                                HStack {
+                                    Text("Live Used:")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundColor(Color("shade_800"))
+                                    Spacer()
+                                    Text("\(TimeAllocationManager.shared.getLiveTimeUsed())s")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundColor(Color("orange_600"))
+                                }
+                                
+                                HStack {
+                                    Text("Call Used:")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundColor(Color("shade_800"))
+                                    Spacer()
+                                    Text("\(TimeAllocationManager.shared.getCallTimeUsed())s")
+                                        .font(.system(size: 14, weight: .medium))
+                                        .foregroundColor(Color("orange_600"))
+                                }
                             }
                         }
                         .padding(.horizontal, 16)
@@ -290,6 +338,9 @@ struct DebugSubscriptionPopupView: View {
             SessionManager.shared.premiumActive = false
             SessionManager.shared.synchronize()
             
+            // Reset all timers for testing purposes
+            resetAllTimersForDebug()
+            
         } else {
             // Set to active subscription with selected tier and period
             let currentTime = Int64(Date().timeIntervalSince1970 * 1000)
@@ -313,9 +364,13 @@ struct DebugSubscriptionPopupView: View {
             // Update main session manager for backwards compatibility
             SessionManager.shared.premiumActive = true
             SessionManager.shared.synchronize()
+            
+            // Reset all timers and replenish based on new subscription tier
+            resetAllTimersForDebug()
+            replenishTimersForDebugSubscription()
         }
         
-        AppLogger.log(tag: "LOG-APP: DebugSubscriptionPopup", message: "applySubscriptionChange() Debug subscription change applied successfully")
+        AppLogger.log(tag: "LOG-APP: DebugSubscriptionPopup", message: "applySubscriptionChange() Debug subscription change applied successfully with timer reset")
     }
     
     private func calculateDebugExpiryTime(currentTime: Int64, period: String) -> Int64 {
@@ -335,6 +390,68 @@ struct DebugSubscriptionPopupView: View {
         }
         
         return Int64(expiryDate.timeIntervalSince1970 * 1000)
+    }
+    
+    // MARK: - Debug Timer Reset Functions
+    
+    /// Reset all timers for debug testing (like subscription renewal)
+    private func resetAllTimersForDebug() {
+        AppLogger.log(tag: "LOG-APP: DebugSubscriptionPopup", message: "resetAllTimersForDebug() Resetting all live feature and call timers for debug testing")
+        
+        // Reset time allocations in TimeAllocationManager (this resets liveTimeUsed and callTimeUsed)
+        TimeAllocationManager.shared.markSubscriptionRenewal()
+        
+        // Reset legacy live seconds in SessionManager
+        SessionManager.shared.liveSeconds = 0
+        
+        // Reset live seconds in MessagingSettingsSessionManager
+        MessagingSettingsSessionManager.shared.liveSeconds = 0
+        
+        // Reset call seconds in MessagingSettingsSessionManager
+        MessagingSettingsSessionManager.shared.callSeconds = 0
+        
+        // Synchronize all changes
+        SessionManager.shared.synchronize()
+        
+        AppLogger.log(tag: "LOG-APP: DebugSubscriptionPopup", message: "resetAllTimersForDebug() All timers reset successfully for debug testing")
+    }
+    
+    /// Replenish timers based on new debug subscription tier
+    private func replenishTimersForDebugSubscription() {
+        AppLogger.log(tag: "LOG-APP: DebugSubscriptionPopup", message: "replenishTimersForDebugSubscription() Replenishing timers for tier: \(selectedTier)")
+        
+        // Use TimeAllocationManager to replenish live seconds based on new subscription
+        TimeAllocationManager.shared.replenishLiveSecondsIfNeeded()
+        
+        // Replenish call seconds based on new subscription
+        TimeAllocationManager.shared.replenishCallSecondsIfNeeded()
+        
+        // For debug purposes, let's also set some manual values to ensure testing works
+        let subscriptionManager = SubscriptionSessionManager.shared
+        
+        if subscriptionManager.hasPlusTierOrHigher() {
+            // Plus tier gets live feature time
+            let remainingLiveTime = TimeAllocationManager.shared.getRemainingLiveTime()
+            if remainingLiveTime > 0 {
+                MessagingSettingsSessionManager.shared.liveSeconds = remainingLiveTime
+                SessionManager.shared.liveSeconds = Int64(remainingLiveTime)
+                AppLogger.log(tag: "LOG-APP: DebugSubscriptionPopup", message: "replenishTimersForDebugSubscription() Set live time to \(remainingLiveTime) seconds for Plus+ tier")
+            }
+        }
+        
+        if subscriptionManager.hasProTier() {
+            // Pro tier gets call feature time
+            let remainingCallTime = TimeAllocationManager.shared.getRemainingCallTime()
+            if remainingCallTime > 0 {
+                MessagingSettingsSessionManager.shared.callSeconds = remainingCallTime
+                AppLogger.log(tag: "LOG-APP: DebugSubscriptionPopup", message: "replenishTimersForDebugSubscription() Set call time to \(remainingCallTime) seconds for Pro tier")
+            }
+        }
+        
+        // Synchronize changes
+        SessionManager.shared.synchronize()
+        
+        AppLogger.log(tag: "LOG-APP: DebugSubscriptionPopup", message: "replenishTimersForDebugSubscription() Timer replenishment completed for debug subscription")
     }
 }
 

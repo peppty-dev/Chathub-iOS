@@ -1,0 +1,38 @@
+{
+  "name": "chathub-ios-notifications",
+  "version": "1.0.0",
+  "description": "iOS-specific notification handler for ChatHub app",
+  "main": "index.js",
+  "scripts": {
+    "serve": "firebase emulators:start --only functions",
+    "shell": "firebase functions:shell",
+    "start": "npm run shell",
+    "deploy": "firebase deploy --only functions:NotificationsiOS",
+    "deploy-all": "firebase deploy --only functions",
+    "logs": "firebase functions:log --only NotificationsiOS",
+    "logs-all": "firebase functions:log"
+  },
+  "engines": {
+    "node": "20"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "firebase-admin": "^11.11.0",
+    "firebase-functions": "^4.5.0"
+  },
+  "devDependencies": {
+    "firebase-functions-test": "^3.3.0"
+  },
+  "private": true,
+  "keywords": [
+    "firebase",
+    "functions",
+    "ios",
+    "notifications",
+    "chathub",
+    "fcm",
+    "apns"
+  ],
+  "author": "ChatHub Team",
+  "license": "ISC"
+}

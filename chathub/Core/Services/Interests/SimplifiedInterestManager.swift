@@ -90,6 +90,56 @@ final class SimplifiedInterestManager {
         AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "Successfully added '\(suggestion)' to pending queue. Queue now: \(pendingSuggestions)")
     }
     
+    /// Process a new message with conversation context for better interest extraction
+    /// - Parameters:
+    ///   - latestText: The latest message text to analyze
+    ///   - contextMessages: Previous messages in the conversation for context
+    ///   - maxContext: Maximum number of total messages to consider (default 5)
+    func processNewMessageWithContext(latestText: String, contextMessages: [String], maxContext: Int = 5) {
+        AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "processNewMessageWithContext() latest: '\(latestText)' contextCount: \(contextMessages.count)")
+        
+        // Prepare context messages by trimming and filtering empty ones
+        // Take up to (maxContext - 1) context messages, but work with any number (1-5 total)
+        let trimmedContext = contextMessages
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .suffix(max(0, maxContext - 1)) // Always reserve 1 slot for latest message, but work with 0+ context
+        
+        // IMPROVED: Process context and current message separately to prevent duplicate counting
+        let contextText = Array(trimmedContext).joined(separator: " ")
+        let currentText = latestText
+        
+        AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "processNewMessageWithContext() context: '\(contextText)' current: '\(currentText)'")
+        
+        // Use enhanced extraction logic that handles context vs current weighting
+        guard let suggestion = extractBestCandidateWithContext(contextText: contextText, currentText: currentText) else {
+            AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "processNewMessageWithContext() no candidate extracted from combined context")
+            return
+        }
+        
+        AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "processNewMessageWithContext() extracted candidate: '\(suggestion)'")
+        
+        // Check if already exists in our list (case insensitive)
+        let currentPhrases = interests.map { $0.phrase.lowercased() }
+        if currentPhrases.contains(suggestion.lowercased()) {
+            AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "Skipping '\(suggestion)' - already in current interests: \(currentPhrases)")
+            return
+        }
+        
+        // Check if already in pending suggestions queue
+        if pendingSuggestions.contains(where: { $0.caseInsensitiveCompare(suggestion) == .orderedSame }) {
+            AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "Skipping '\(suggestion)' - already in pending queue: \(pendingSuggestions)")
+            return
+        }
+        
+        // Add to pending suggestions queue
+        var pending = pendingSuggestions
+        pending.append(suggestion)
+        pendingSuggestions = pending
+        
+        AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "processNewMessageWithContext() added '\(suggestion)' to pending. Queue: \(pendingSuggestions)")
+    }
+    
     /// User accepted an interest suggestion
     /// - Parameter phrase: The interest phrase to add
     func addInterest(_ phrase: String) {
@@ -184,7 +234,92 @@ final class SimplifiedInterestManager {
     
     // MARK: - Private Methods
     
+    /// Enhanced extraction that handles context vs current message weighting to prevent duplicate inflation
+    /// - Parameters:
+    ///   - contextText: Previous messages combined
+    ///   - currentText: The latest message
+    /// - Returns: Best candidate without duplicate counting bias
+    private func extractBestCandidateWithContext(contextText: String, currentText: String) -> String? {
+        AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "extractBestCandidateWithContext() context: '\(contextText.prefix(100))...' current: '\(currentText)'")
+        
+        // Process current message text
+        let trimmedCurrent = currentText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedCurrent.isEmpty else {
+            AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "extractBestCandidateWithContext() current text is empty")
+            return nil
+        }
+        
+        // Clean profanity from current message
+        let cleanedCurrent = Profanity.share.removeProfaneWordsOnly(trimmedCurrent)
+        if cleanedCurrent.isEmpty {
+            AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "extractBestCandidateWithContext() current message all profane")
+            return nil
+        }
+        
+        // Get context tokens (for reference/disambiguation only)
+        var contextTokens: Set<String> = []
+        if !contextText.isEmpty {
+            let cleanedContext = Profanity.share.removeProfaneWordsOnly(contextText)
+            contextTokens = Set(tokenize(text: cleanedContext))
+        }
+        
+        // Get current message tokens (primary source)
+        let currentTokens = tokenize(text: cleanedCurrent)
+        
+        AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "extractBestCandidateWithContext() context tokens: \(contextTokens.count), current tokens: \(currentTokens.count)")
+        
+        if currentTokens.isEmpty {
+            AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "extractBestCandidateWithContext() no current tokens found")
+            return nil
+        }
+        
+        // Process tokens with context-aware scoring
+        var bestCandidate: String?
+        var bestScore: Double = 0
+        
+        // Primary scoring: Current message tokens (full weight)
+        for token in currentTokens {
+            let normalizedPhrase = normalizeAnyElongatedWord(token.lowercased())
+            let phrase = normalizedPhrase
+            
+            // Apply same filters as before
+            if phrase.count < 3 || phrase.count > 20 { continue }
+            if Self.commonWordsToSkip.contains(phrase) { continue }
+            
+            var score: Double = 1.0
+            
+            // Activity keyword bonus
+            if Self.activityKeywords.contains(phrase) {
+                score += 2.0
+            }
+            
+            // Context boost: if word also appears in context, give small bonus (but don't double-count)
+            if contextTokens.contains(phrase) {
+                score += 0.5 // Small context reinforcement bonus
+                AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "extractBestCandidateWithContext() '\(phrase)' reinforced by context (+0.5)")
+            }
+            
+            // ML scoring on current message only (prevents context inflation)
+            let mlScore = calculateMLScore(for: phrase, in: cleanedCurrent)
+            score += mlScore
+            
+            AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "extractBestCandidateWithContext() '\(phrase)' final score: \(score)")
+            
+            if score > bestScore {
+                bestScore = score
+                bestCandidate = phrase
+                AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "extractBestCandidateWithContext() new best: '\(phrase)' score: \(score)")
+            }
+        }
+        
+        // Apply threshold
+        let result = bestScore >= 2.0 ? bestCandidate : nil
+        AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "extractBestCandidateWithContext() result: '\(result ?? "nil")' (score: \(bestScore))")
+        return result
+    }
+    
     /// Extract the best interest candidate from text using existing Apple AI/ML logic
+    /// Legacy method for single-message processing
     private func extractBestCandidate(from text: String) -> String? {
         // Reuse the existing InterestExtractionService tokenization and ML logic
         // but simplified to just return the best candidate without complex scoring
@@ -197,14 +332,18 @@ final class SimplifiedInterestManager {
             return nil 
         }
         
-        // Use existing profanity check
-        if containsProfanity(trimmed) {
-            AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "extractBestCandidate() contains profanity, skipping")
+        // Use enhanced profanity filtering - remove only profane words, keep clean ones
+        let cleanedText = Profanity.share.removeProfaneWordsOnly(trimmed)
+        if cleanedText.isEmpty {
+            AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "extractBestCandidate() all words were profane, skipping")
             return nil
         }
         
-        // Use existing tokenization
-        let tokens = tokenize(text: trimmed)
+        // Update trimmed to use cleaned text for processing
+        let finalText = cleanedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Use existing tokenization on cleaned text
+        let tokens = tokenize(text: finalText)
         AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "extractBestCandidate() tokens: \(tokens)")
         
         if tokens.isEmpty { 
@@ -217,10 +356,22 @@ final class SimplifiedInterestManager {
         var bestScore: Double = 0
         
         for token in tokens {
-            let phrase = token
+            // Universal elongation normalization - handle ANY elongated word
+            let normalizedPhrase = normalizeAnyElongatedWord(token.lowercased())
+            let phrase = normalizedPhrase
+            
+            AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "extractBestCandidate() token: '\(token)' → normalized: '\(phrase)'")
+            
+            // Strict length filtering: must be 3-20 characters (after normalization)
             if phrase.count < 3 || phrase.count > 20 { 
-                AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "extractBestCandidate() skipping '\(phrase)' - invalid length")
+                AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "extractBestCandidate() skipping '\(phrase)' - invalid length (\(phrase.count) chars)")
                 continue 
+            }
+            
+            // Skip if it's a common word (after normalization)
+            if Self.commonWordsToSkip.contains(phrase) {
+                AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "extractBestCandidate() skipping '\(phrase)' - common word")
+                continue
             }
             
             var score: Double = 1.0
@@ -232,7 +383,7 @@ final class SimplifiedInterestManager {
             }
             
             // Use Apple ML for additional scoring
-            let mlScore = calculateMLScore(for: phrase, in: trimmed)
+            let mlScore = calculateMLScore(for: phrase, in: finalText)
             score += mlScore
             AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "extractBestCandidate() '\(phrase)' final score: \(score) (base: 1.0, ml: \(mlScore))")
             
@@ -303,6 +454,97 @@ final class SimplifiedInterestManager {
         return Profanity.share.doesContainProfanity(text)
     }
     
+    /// Universal elongation normalizer - handles elongation ANYWHERE in the word
+    /// Examples: "footballlll" → "football", "fooootball" → "football", "cooookinggg" → "cooking"
+    private func normalizeAnyElongatedWord(_ word: String) -> String {
+        let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        
+        AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "normalizeAnyElongatedWord() input: '\(trimmed)'")
+        
+        // Step 1: Multi-pass normalization to handle all consecutive repeated characters
+        // This handles elongation anywhere: beginning, middle, end, or multiple places
+        var normalized = trimmed
+        var previousNormalized = ""
+        var passCount = 0
+        
+        // Keep normalizing until no more changes (handles complex cases like "coooookinnnggg")
+        while normalized != previousNormalized && passCount < 5 {  // Safety limit to prevent infinite loops
+            previousNormalized = normalized
+            passCount += 1
+            
+            // Replace all instances of 3+ consecutive identical characters with single character
+            let consecutivePattern = "(.)\\1{2,}"  // 3+ consecutive identical characters ANYWHERE
+            normalized = normalized.replacingOccurrences(of: consecutivePattern, with: "$1", options: .regularExpression)
+            
+            AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "normalizeAnyElongatedWord() pass \(passCount): '\(previousNormalized)' → '\(normalized)'")
+        }
+        
+        // Step 2: Restore legitimate double letters for common words
+        // Some words naturally have double letters that we should preserve
+        let legitimateDoublePairs = [
+            // Common English double letters
+            ("footbal", "football"),       // Handle football specifically
+            ("swiming", "swimming"),       // Handle swimming specifically  
+            ("runing", "running"),         // Handle running specifically
+            ("hapines", "happiness"),      // Handle happiness specifically
+            ("succes", "success"),         // Handle success specifically
+            ("acces", "access"),           // Handle access specifically
+            ("proces", "process"),         // Handle process specifically
+            ("busines", "business"),       // Handle business specifically
+            ("profes", "profess"),         // Handle professional specifically
+            ("clas", "class"),             // Handle class specifically
+            ("dres", "dress"),             // Handle dress specifically
+            ("pres", "press"),             // Handle press specifically
+            ("ful", "full"),               // Handle full specifically
+            ("wel", "well"),               // Handle well specifically
+            ("tel", "tell"),               // Handle tell specifically
+            ("cel", "cell"),               // Handle cell specifically
+            ("bil", "bill"),               // Handle bill specifically
+            ("wil", "will"),               // Handle will specifically
+            ("hil", "hill"),               // Handle hill specifically
+            ("fil", "fill"),               // Handle fill specifically
+            ("kil", "kill"),               // Handle kill specifically
+        ]
+        
+        // Apply legitimate double letter restoration
+        for (single, double) in legitimateDoublePairs {
+            if normalized == single {
+                normalized = double
+                AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "normalizeAnyElongatedWord() restored double: '\(single)' → '\(double)'")
+                break
+            }
+        }
+        
+        // Step 3: Handle word-specific patterns that might need special treatment
+        let specialPatterns = [
+            ("^(okay)y*$", "$1"),           // okayyyy, okayyy → okay
+            ("^(yeah)h*$", "$1"),           // yeahhhh, yeahhh → yeah  
+            ("^(hello)o*$", "$1"),          // hellooo, helloo → hello
+            ("^(please)e*$", "$1"),         // pleaseee, pleasee → please
+            ("^(thanks)s*$", "$1"),         // thankssss, thankss → thanks
+            ("^(nice)e*$", "$1"),           // niceee, nicee → nice
+            ("^(cool)l*$", "$1"),           // coool, cool → cool (but preserve if already cool)
+        ]
+        
+        for (pattern, replacement) in specialPatterns {
+            let newNormalized = normalized.replacingOccurrences(of: pattern, with: replacement, options: .regularExpression)
+            if newNormalized != normalized {
+                AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "normalizeAnyElongatedWord() special pattern: '\(normalized)' → '\(newNormalized)'")
+                normalized = newNormalized
+                break
+            }
+        }
+        
+        AppLogger.log(tag: "LOG-APP: SimplifiedInterest", message: "normalizeAnyElongatedWord() final: '\(word)' → '\(normalized)'")
+        
+        return normalized
+    }
+    
+    /// Quick check if a word is in our common words list
+    private func isCommonWord(_ word: String) -> Bool {
+        return Self.commonWordsToSkip.contains(word.lowercased())
+    }
+    
     /// Sync interests to existing SessionManager and Firestore systems
     private func syncToSessionAndFirestore() {
         let interestPhrases = getCurrentInterests()
@@ -339,7 +581,20 @@ final class SimplifiedInterestManager {
     
     /// Common words to skip during tokenization
     private static let commonWordsToSkip: Set<String> = [
-        "the", "a", "an", "and", "or", "but", "if", "then", "of", "to", "for", "with", "by", "from", "as", "at", "in", "on", "is", "are", "was", "were", "be", "been", "have", "has", "had", "do", "does", "did", "will", "would", "could", "should", "may", "might", "can", "this", "that", "these", "those", "i", "you", "he", "she", "we", "they", "me", "him", "her", "us", "them", "my", "your", "his", "her", "our", "their"
+        // Articles, prepositions, pronouns
+        "the", "a", "an", "and", "or", "but", "if", "then", "of", "to", "for", "with", "by", "from", "as", "at", "in", "on", "is", "are", "was", "were", "be", "been", "have", "has", "had", "do", "does", "did", "will", "would", "could", "should", "may", "might", "can", "this", "that", "these", "those", "i", "you", "he", "she", "we", "they", "me", "him", "her", "us", "them", "my", "your", "his", "her", "our", "their",
+        
+        // Greetings and common chat words
+        "hi", "hey", "hello", "hii", "hiiii", "helo", "hllo", "yo", "sup", "wassup", "whatsup",
+        
+        // Common responses and fillers
+        "yes", "yeah", "yep", "yup", "no", "nah", "nope", "ok", "okay", "kay", "sure", "wow", "omg", "lol", "lmao", "haha", "hehe", "hmm", "umm", "uhh", "uh", "oh", "ah", "so", "well", "like", "just", "really", "very", "much", "more", "most", "some", "any", "all", "both", "each", "every", "other", "another", "same", "different",
+        
+        // Question words
+        "what", "when", "where", "why", "who", "how", "which", "whose", "whom",
+        
+        // Time and basic words
+        "now", "then", "here", "there", "today", "tomorrow", "yesterday", "morning", "evening", "night", "day", "time", "good", "bad", "nice", "cool", "great", "awesome", "amazing", "perfect", "fine", "right", "wrong", "true", "false", "big", "small", "new", "old", "first", "last", "next", "back", "up", "down", "left", "right"
     ]
     
     /// Activity keywords that are likely to indicate interests
