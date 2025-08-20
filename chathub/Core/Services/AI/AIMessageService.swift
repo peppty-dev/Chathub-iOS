@@ -16,7 +16,10 @@ class AIMessageService {
     private let database = Firestore.firestore()
     private let falconChatbot = FalconChatbotService.shared
     private let moodGenerator = MoodGenerator.shared
-    private let conversationManager = ChatConversationManager.shared
+    // Deprecated: ChatConversationManager will be removed in favor of structured prompts
+    // private let conversationManager = ChatConversationManager.shared
+    private let structuredPromptBuilder = StructuredPromptBuilder()
+    private let curatedExamplesProvider = CuratedExamplesProvider()
     
     // MARK: - Public Methods (Android Parity)
     
@@ -42,6 +45,8 @@ class AIMessageService {
         isProfanity: Bool,
         lastAiMessage: String?,
         currentMessages: String = "",
+        myInterestTags: [String] = [],
+        otherInterestTags: [String] = [],
         completion: @escaping (Bool) -> Void = { _ in }
     ) {
         AppLogger.log(tag: "LOG-APP: AIMessageService", message: "generateAiMessage() starting AI message generation")
@@ -63,6 +68,8 @@ class AIMessageService {
                 isProfanity: isProfanity,
                 lastAiMessage: lastAiMessage,
                 currentMessages: currentMessages,
+                myInterestTags: myInterestTags,
+                otherInterestTags: otherInterestTags,
                 completion: completion
             )
         }
@@ -112,6 +119,8 @@ class AIMessageService {
         isProfanity: Bool,
         lastAiMessage: String?,
         currentMessages: String = "",
+        myInterestTags: [String] = [],
+        otherInterestTags: [String] = [],
         completion: @escaping (Bool) -> Void
     ) {
         AppLogger.log(tag: "LOG-APP: AIMessageService", message: "prepareToGetAiMessage() preparing AI message generation")
@@ -123,31 +132,30 @@ class AIMessageService {
                 return
             }
             
-            // Generate conversation context - Android parity
-            let myInterests = myProfile.interests?.components(separatedBy: ",") ?? []
-            let otherInterests = otherProfile.interests?.components(separatedBy: ",") ?? []
-            
-            let conversationContext = self.conversationManager.generateConversation(
-                myInterests: myInterests,
-                otherInterests: otherInterests,
-                myProfile: myProfile,
-                otherProfile: otherProfile
-            )
-            
-            // Get mood for personality - Android parity
+            // Prepare input data for structured prompt
+            // iOS: Use SimplifiedInterestManager/SessionManager interests (Android parity for using curated/collected interests)
+            var myInterests = myInterestTags
+            if myInterests.isEmpty {
+                myInterests = SessionManager.shared.interestTags
+            }
+            let otherInterests = otherInterestTags
+
+            // Mood
             let mood = self.moodGenerator.getMood(isProfanity: isProfanity)
             
-            // Build prompt - Android parity using createChatPrompt
-            let prompt = self.createChatPrompt(
-                aiExampleMessages: conversationContext,
-                aiTrainingMessages: trainingMessages,
-                messages: currentMessages,
-                otherProfile: otherProfile,
+            // Segment 3: Curated, style-focused examples
+            let curatedExamples = self.curatedExamplesProvider.curatedExamples(myProfile: myProfile, otherProfile: otherProfile)
+
+            // Build new 5-segment structured prompt
+            let prompt = self.structuredPromptBuilder.buildPrompt(
                 myProfile: myProfile,
+                otherProfile: otherProfile,
                 myInterests: myInterests,
-                mystatus: self.sessionManager.getInterestSentence() ?? "",
-                mood: mood,
-                similarReply: false
+                otherInterests: otherInterests,
+                curatedExamples: curatedExamples,
+                trainingMessages: trainingMessages,
+                currentConversation: currentMessages,
+                mood: mood
             )
             
             // Send to AI - Android parity
@@ -185,76 +193,7 @@ class AIMessageService {
         completion(trainingText)
     }
     
-    /// Creates AI chat prompt - Android createChatPrompt() equivalent
-    private func createChatPrompt(
-        aiExampleMessages: String,
-        aiTrainingMessages: String,
-        messages: String,
-        otherProfile: UserCoreDataReplacement,
-        myProfile: UserCoreDataReplacement,
-        myInterests: [String],
-        mystatus: String,
-        mood: String,
-        similarReply: Bool
-    ) -> String {
-        AppLogger.log(tag: "LOG-APP: AIMessageService", message: "createChatPrompt() messages: \(messages), otherProfile: \(otherProfile), myProfile: \(myProfile), myInterests: \(myInterests), mystatus: \(mystatus)")
-        
-        guard let otherName = otherProfile.name, let myName = myProfile.name else {
-            AppLogger.log(tag: "LOG-APP: AIMessageService", message: "Profile names are null, cannot create chat prompt")
-            return ""
-        }
-        
-        var promptBuilder = ""
-        
-        let otherGender = otherProfile.gender ?? "Unknown"
-        let myGender = myProfile.gender ?? "Unknown"
-        
-        var otherPronoun1 = "He"
-        var otherPronoun2 = "His"
-        if otherGender.lowercased() == "female" {
-            otherPronoun1 = "She"
-            otherPronoun2 = "Her"
-        }
-        
-        var myPronoun1 = "He"
-        var myPronoun2 = "His"
-        if myGender.lowercased() == "female" {
-            myPronoun1 = "She"
-            myPronoun2 = "Her"
-        }
-        
-        promptBuilder += "You are \(otherName). You are in an adult chat app called ChatHub."
-        promptBuilder += generateYourProfileDescription(profile: otherProfile)
-        promptBuilder += " You are chatting with \(myName),\(generateProfileDescription(pronoun1: myPronoun1, pronoun2: myPronoun2, profile: myProfile))"
-        promptBuilder += "\n"
-        promptBuilder += "\n"
-        promptBuilder += "Here is how \(myName) and \(otherName)'s conversation has gone so far:"
-        promptBuilder += "\n"
-        
-        if !aiExampleMessages.isEmpty {
-            promptBuilder += aiExampleMessages
-        }
-        
-        if !aiTrainingMessages.isEmpty {
-            promptBuilder += aiTrainingMessages
-        }
-        
-        promptBuilder += getConversationExample(otherProfile: otherProfile, myProfile: myProfile)
-        promptBuilder += "\n"
-        promptBuilder += "\n"
-        promptBuilder += "Now reply to \(myName)'s message as you are \(otherName), keep your reply short and \(mood):"
-        promptBuilder += "\n"
-        promptBuilder += messages.trimmingCharacters(in: .whitespacesAndNewlines)
-        promptBuilder += "\n"
-        promptBuilder += "\(otherName)'s reply:"
-        
-        var generatedPrompt = promptBuilder
-        generatedPrompt = generatedPrompt.replacingOccurrences(of: " +", with: " ", options: .regularExpression)
-        
-        AppLogger.log(tag: "LOG-APP: AIMessageService", message: "createChatPrompt() generatedPrompt: \(generatedPrompt)")
-        
-        return generatedPrompt
-    }
+    // Deprecated: Old free-form prompt generator removed in favor of StructuredPromptBuilder
     
     /// Generates conversation examples based on gender combinations - Android getConversationExample() equivalent
     private func getConversationExample(otherProfile: UserCoreDataReplacement, myProfile: UserCoreDataReplacement) -> String {
@@ -482,12 +421,12 @@ class AIMessageService {
     ) {
         AppLogger.log(tag: "LOG-APP: AIMessageService", message: "getAiMessage() checking cooldown")
         
-        // Check cooldown - Android parity
+        // Check failure recovery block - Android parity
         let currentTime = Int64(Date().timeIntervalSince1970)
-        let cooldownTime = sessionManager.getAiCoolOffTime()
+        let lastFailureTime = sessionManager.getAiLastFailureTime()
         
-        if (cooldownTime + 60) > currentTime {
-            AppLogger.log(tag: "LOG-APP: AIMessageService", message: "getAiMessage() AI in cooldown period")
+        if (lastFailureTime + 60) > currentTime {
+            AppLogger.log(tag: "LOG-APP: AIMessageService", message: "getAiMessage() AI in failure recovery period (60s block after last failure)")
             completion(false)
             return
         }
@@ -516,7 +455,7 @@ class AIMessageService {
             
                          func onFailure(error: Error) {
                  AppLogger.log(tag: "LOG-APP: AIMessageService", message: "getAiMessage() AI request failed: \(error.localizedDescription)")
-                 aiService.sessionManager.setAiCoolOffTime(currentTime)
+                 aiService.sessionManager.setAiLastFailureTime(currentTime)
                  
                  // Log analytics - Android parity
                  Analytics.logEvent("app_events", parameters: [
@@ -619,19 +558,20 @@ class AIMessageService {
         let truncatedMessage = String(trimmedMessage.prefix(250))
         let cleanedMessage = truncatedMessage.replacingOccurrences(of: "\n", with: " ")
         let messageId = "\(Int64(Date().timeIntervalSince1970 * 1000))"
-        let mood = moodGenerator.getMood(isProfanity: isProfanity)
         
+        // Align field names with MessagesView expectations
         let messageData: [String: Any] = [
             "message_id": messageId,
-            "message_user_id": otherUserId,
-            "message_user_name": otherUsername,
-            "message_content_text": cleanedMessage,
-            "message_content_image_url": "",
-            "message_time": FieldValue.serverTimestamp(),
+            "message_userId": otherUserId,
+            "message_sender_name": otherUsername,
+            "message_text_content": cleanedMessage,
+            "message_image": "",
+            "message_time_stamp": FieldValue.serverTimestamp(),
             "message_seen": false,
             "message_is_bad": isProfanity,
             "message_is_image": false,
-            "mood": mood
+            "message_ad_available": false,
+            "message_premium": false
         ]
         
         // Save to Firebase - Android parity
@@ -655,11 +595,12 @@ class AIMessageService {
                     let currentCount = self.sessionManager.getTotalNoOfMessagesSent()
                     self.sessionManager.setTotalNoOfMessageSent(currentCount + 1)
                     
-                    // Update chat metadata - Android parity
+                    // Update chat metadata to match iOS chat list expectations
                     let chatUpdate: [String: Any] = [
-                        "time": FieldValue.serverTimestamp(),
-                        "is_chat_new_message": true,
-                        "user_last_msg_user_id": otherUserId
+                        "last_message": cleanedMessage,
+                        "last_message_timestamp": FieldValue.serverTimestamp(),
+                        "last_message_sent_by_user_id": otherUserId,
+                        "new_message": true
                     ]
                     
                     self.database.collection("Chats")
@@ -677,8 +618,8 @@ class AIMessageService {
                         messageTime: Date().timeIntervalSince1970
                     )
                     
-                    // Set AI cooldown after successful message - Android parity
-                    self.sessionManager.setAiCoolOffTime(Int64(Date().timeIntervalSince1970))
+                    // NOTE: Do NOT set failure time on success - failure recovery is only for failures (Android parity)
+                    // Failure timestamp is only set when AI requests fail to prevent rapid retry spam
                     
                     completion(true)
                 }

@@ -12,6 +12,7 @@ struct MessageData {
     let docId: String
     let adAvailable: Int
     let premium: Int
+    let messageSeen: Int // Android Parity: Store seen status in local database (0 = false, 1 = true)
 }
 
 class MessagesDB {
@@ -34,6 +35,7 @@ class MessagesDB {
             }
             
             self.createMessageTable(db: db)
+            self.migrateToAddMessageSeenColumn(db: db)
         }
     }
     
@@ -57,7 +59,8 @@ class MessagesDB {
             SendDate INT,
             DocId TEXT,
             AdAvailable INT,
-            premium INT);
+            premium INT,
+            MessageSeen INT DEFAULT 0);
         """
         var createTableStatement: OpaquePointer?
         if sqlite3_prepare_v2(db, createTableString, -1, &createTableStatement, nil) == SQLITE_OK {
@@ -68,6 +71,58 @@ class MessagesDB {
             AppLogger.log(tag: "LOG-APP: MessagesDB", message: "createMessageTable() - Failed to create Message table: \(String(cString: sqlite3_errmsg(db)))")
         }
         sqlite3_finalize(createTableStatement)
+    }
+    
+    // MARK: - Database Migration
+    
+    /// Migrate existing Message table to add MessageSeen column if it doesn't exist
+    private func migrateToAddMessageSeenColumn(db: OpaquePointer?) {
+        guard let db = db else {
+            AppLogger.log(tag: "LOG-APP: MessagesDB", message: "migrateToAddMessageSeenColumn() - Database connection is nil")
+            return
+        }
+        
+        // Check if MessageSeen column already exists
+        let pragmaQuery = "PRAGMA table_info(Message)"
+        var statement: OpaquePointer?
+        
+        var hasMessageSeenColumn = false
+        
+        if sqlite3_prepare_v2(db, pragmaQuery, -1, &statement, nil) == SQLITE_OK {
+            while sqlite3_step(statement) == SQLITE_ROW {
+                if let columnNamePtr = sqlite3_column_text(statement, 1) {
+                    let columnName = String(cString: columnNamePtr)
+                    if columnName == "MessageSeen" {
+                        hasMessageSeenColumn = true
+                        break
+                    }
+                }
+            }
+        }
+        sqlite3_finalize(statement)
+        
+        // Add MessageSeen column if it doesn't exist
+        if !hasMessageSeenColumn {
+            AppLogger.log(tag: "LOG-APP: MessagesDB", message: "migrateToAddMessageSeenColumn() - Adding MessageSeen column to existing table")
+            
+            let alterTableString = "ALTER TABLE Message ADD COLUMN MessageSeen INT DEFAULT 0"
+            var alterStatement: OpaquePointer?
+            
+            if sqlite3_prepare_v2(db, alterTableString, -1, &alterStatement, nil) == SQLITE_OK {
+                if sqlite3_step(alterStatement) == SQLITE_DONE {
+                    AppLogger.log(tag: "LOG-APP: MessagesDB", message: "migrateToAddMessageSeenColumn() - Successfully added MessageSeen column")
+                } else {
+                    let errorMsg = String(cString: sqlite3_errmsg(db))
+                    AppLogger.log(tag: "LOG-APP: MessagesDB", message: "migrateToAddMessageSeenColumn() - Failed to add MessageSeen column: \(errorMsg)")
+                }
+            } else {
+                let errorMsg = String(cString: sqlite3_errmsg(db))
+                AppLogger.log(tag: "LOG-APP: MessagesDB", message: "migrateToAddMessageSeenColumn() - Failed to prepare ALTER statement: \(errorMsg)")
+            }
+            sqlite3_finalize(alterStatement)
+        } else {
+            AppLogger.log(tag: "LOG-APP: MessagesDB", message: "migrateToAddMessageSeenColumn() - MessageSeen column already exists, no migration needed")
+        }
     }
     
     func deleteMessageTable(db: OpaquePointer?) {
@@ -113,14 +168,14 @@ class MessagesDB {
     }
     
     // Insert a message into the Message table (for local DB sync)
-    func insertMessage(messageId: String, chatId: String, message: String, senderId: String, image: String, sendDate: Int, docId: String, adAvailable: Int, premium: Int, db: OpaquePointer?) {
+    func insertMessage(messageId: String, chatId: String, message: String, senderId: String, image: String, sendDate: Int, docId: String, adAvailable: Int, premium: Int, messageSeen: Int = 0, db: OpaquePointer?) {
         guard let db = db else {
             AppLogger.log(tag: "LOG-APP: MessagesDB", message: "insertMessage() - Database not ready")
             return
         }
         
         var insertStatement: OpaquePointer?
-        let insertStatementString = "INSERT INTO Message (MessageId, ChatId, Message, SenderId, Image, SendDate, DocId, AdAvailable, premium) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        let insertStatementString = "INSERT INTO Message (MessageId, ChatId, Message, SenderId, Image, SendDate, DocId, AdAvailable, premium, MessageSeen) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         
         AppLogger.log(tag: "LOG-APP: MessagesDB", message: "insertMessage() - Inserting message: \(messageId)")
         
@@ -141,6 +196,7 @@ class MessagesDB {
             sqlite3_bind_text(insertStatement, 7, DocId.utf8String, -1, nil)
             sqlite3_bind_int(insertStatement, 8, Int32(adAvailable))
             sqlite3_bind_int(insertStatement, 9, Int32(premium))
+            sqlite3_bind_int(insertStatement, 10, Int32(messageSeen))
             
             if sqlite3_step(insertStatement) == SQLITE_DONE {
                 AppLogger.log(tag: "LOG-APP: MessagesDB", message: "insertMessage() - Successfully inserted message: \(messageId)")
@@ -196,6 +252,10 @@ class MessagesDB {
                 let adAvailable = Int(sqlite3_column_int(statement, 7))
                 let premium = Int(sqlite3_column_int(statement, 8))
                 
+                // Handle MessageSeen column safely (might not exist in older databases)
+                let columnCount = sqlite3_column_count(statement)
+                let messageSeen = columnCount > 9 ? Int(sqlite3_column_int(statement, 9)) : 0
+                
                 AppLogger.log(tag: "LOG-APP: MessagesDB", message: "selectMessagesByChatId() - Row \(rowCount): messageId=\(messageId), chatId=\(chatId), message=\(message.prefix(20))..., senderId=\(senderId)")
                 
                 let msgData = MessageData(
@@ -207,7 +267,8 @@ class MessagesDB {
                     sendDate: sendDate,
                     docId: docId,
                     adAvailable: adAvailable,
-                    premium: premium
+                    premium: premium,
+                    messageSeen: messageSeen
                 )
                 messages.append(msgData)
             }
@@ -282,6 +343,75 @@ class MessagesDB {
         case .failure(let error):
             AppLogger.log(tag: "LOG-APP: MessagesDB", message: "getAllChatIds() - Failed to get chat IDs: \(error)")
             return []
+        }
+    }
+    
+    // MARK: - Message Seen Status Updates
+    
+    /// Update seen status for a specific message in local database
+    func updateMessageSeenStatus(messageId: String, isMessageSeen: Bool) {
+        let seenValue = isMessageSeen ? 1 : 0
+        
+        AppLogger.log(tag: "LOG-APP: MessagesDB", message: "updateMessageSeenStatus() - Updating seen status for message: \(messageId) to \(isMessageSeen)")
+        
+        // CRITICAL FIX: Use DatabaseManager's centralized queue for all operations
+        DatabaseManager.shared.executeOnDatabaseQueueAsync { db in
+            guard let db = db else {
+                AppLogger.log(tag: "LOG-APP: MessagesDB", message: "updateMessageSeenStatus() - Database connection is nil")
+                return
+            }
+            
+            self.updateMessageSeenStatusInternal(messageId: messageId, seenValue: seenValue, db: db)
+        }
+    }
+    
+    /// Internal method to update seen status (must be called from database queue)
+    private func updateMessageSeenStatusInternal(messageId: String, seenValue: Int, db: OpaquePointer) {
+        let updateStatementString = "UPDATE Message SET MessageSeen = ? WHERE DocId = ?"
+        var updateStatement: OpaquePointer?
+        
+        if sqlite3_prepare_v2(db, updateStatementString, -1, &updateStatement, nil) == SQLITE_OK {
+            sqlite3_bind_int(updateStatement, 1, Int32(seenValue))
+            sqlite3_bind_text(updateStatement, 2, (messageId as NSString).utf8String, -1, nil)
+            
+            if sqlite3_step(updateStatement) == SQLITE_DONE {
+                let changes = sqlite3_changes(db)
+                AppLogger.log(tag: "LOG-APP: MessagesDB", message: "updateMessageSeenStatusInternal() - Successfully updated seen status for message: \(messageId), rows affected: \(changes)")
+            } else {
+                let errorMsg = String(cString: sqlite3_errmsg(db))
+                AppLogger.log(tag: "LOG-APP: MessagesDB", message: "updateMessageSeenStatusInternal() - Failed to update seen status for message: \(messageId), error: \(errorMsg)")
+            }
+        } else {
+            let errorMsg = String(cString: sqlite3_errmsg(db))
+            AppLogger.log(tag: "LOG-APP: MessagesDB", message: "updateMessageSeenStatusInternal() - Failed to prepare statement for message: \(messageId), error: \(errorMsg)")
+        }
+        sqlite3_finalize(updateStatement)
+    }
+    
+    /// Batch update seen status for multiple messages (more efficient for bulk operations)
+    func updateMultipleMessageSeenStatus(messageIds: [String], isMessageSeen: Bool) {
+        guard !messageIds.isEmpty else { return }
+        
+        let seenValue = isMessageSeen ? 1 : 0
+        AppLogger.log(tag: "LOG-APP: MessagesDB", message: "updateMultipleMessageSeenStatus() - Updating \(messageIds.count) messages to seen status: \(isMessageSeen)")
+        
+        DatabaseManager.shared.executeOnDatabaseQueueAsync { db in
+            guard let db = db else {
+                AppLogger.log(tag: "LOG-APP: MessagesDB", message: "updateMultipleMessageSeenStatus() - Database connection is nil")
+                return
+            }
+            
+            // Begin transaction for better performance
+            sqlite3_exec(db, "BEGIN TRANSACTION", nil, nil, nil)
+            
+            for messageId in messageIds {
+                self.updateMessageSeenStatusInternal(messageId: messageId, seenValue: seenValue, db: db)
+            }
+            
+            // Commit transaction
+            sqlite3_exec(db, "COMMIT", nil, nil, nil)
+            
+            AppLogger.log(tag: "LOG-APP: MessagesDB", message: "updateMultipleMessageSeenStatus() - Batch update completed for \(messageIds.count) messages")
         }
     }
 } 

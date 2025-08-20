@@ -727,7 +727,7 @@ if aiChatIds.contains(chatId.trimmingCharacters(in: .whitespaces)) {
         AnalyticsParameterItemName: "ai_chat_opened_from_profile"
     ])
     sessionManager.lastMessageReceivedTime = Date().timeIntervalSince1970
-} else if shouldAiTakeOver() {
+} else if sessionManager.shouldAiTakeOver(otherUserId: otherUserId, contextTag: "ChatFlowManager") {
     // Start new AI chat based on takeover conditions
     currentAiChatIds.append(chatId)
     sessionManager.aiChatIds = currentAiChatIds

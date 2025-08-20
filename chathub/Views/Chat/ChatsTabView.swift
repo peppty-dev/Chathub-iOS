@@ -510,6 +510,14 @@ struct ChatsTabView: View {
             DispatchQueue.main.async {
                 if success {
                     AppLogger.log(tag: "LOG-APP: ChatsTabView", message: "clearConversationBothSides() DeleteChatService completed successfully")
+                    // Also remove from AI chat IDs if present
+                    var ids = SessionManager.shared.aiChatIds
+                    let trimmed = chat.ChatId.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let index = ids.firstIndex(of: trimmed) {
+                        ids.remove(at: index)
+                        SessionManager.shared.aiChatIds = ids
+                        AppLogger.log(tag: "LOG-APP: ChatsTabView", message: "clearConversationBothSides() removed chatId from aiChatIds: \(trimmed)")
+                    }
                     viewModel.refreshChats()
                 } else {
                     AppLogger.log(tag: "LOG-APP: ChatsTabView", message: "clearConversationBothSides() DeleteChatService failed")

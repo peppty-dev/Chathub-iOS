@@ -48,11 +48,11 @@ struct RatingPopupView: View {
                                 Button(action: {
                                     ratingService.rating = Float(star)
                                 }) {
-                                    Image(systemName: star <= Int(ratingService.rating) ? "star.fill" : "star")
-                                        .font(.system(size: 28))
-                                        .foregroundColor(star <= Int(ratingService.rating) ? 
-                                                       starColor(for: Int(ratingService.rating)) : 
-                                                       Color("grey_500"))
+                                                                    Image(systemName: "star.fill")
+                                    .font(.system(size: 28))
+                                    .foregroundColor(star <= Int(ratingService.rating) ? 
+                                                   starColor(for: Int(ratingService.rating)) : 
+                                                   Color.gray)
                                         .scaleEffect(starScale(for: star))
                                         .animation(.spring(response: 0.3, dampingFraction: 0.6), value: ratingService.rating)
                                 }
@@ -61,44 +61,60 @@ struct RatingPopupView: View {
                             }
                         }
                         
-                        // Rating Guide (matching Android rating_guide layout) - improved styling
-                        HStack(spacing: 0) {
-                            Text("Bad")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(Color("red_500"))
-                                .frame(maxWidth: .infinity)
+                        // Rating Guide (positioning labels below specific stars)
+                        HStack(spacing: 16) { // Match star spacing
+                            // Bad - positioned below first star - show when rating is 0, 1, or 2
+                            if Int(ratingService.rating) == 0 || Int(ratingService.rating) <= 2 {
+                                Text("Bad")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundColor(.red)
+                                    .frame(width: 44, alignment: .center)
+                            } else {
+                                Spacer().frame(width: 44)
+                            }
                             
-                            Text("Average")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(Color("orange_500"))
-                                .frame(maxWidth: .infinity)
+                            // Empty space for second star
+                            Spacer().frame(width: 44)
                             
+                            // Average - positioned below middle (third) star - show when rating is 0, 1, 2, or 3 (hide for 4-5)
+                            if Int(ratingService.rating) == 0 || Int(ratingService.rating) <= 3 {
+                                Text("Average")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundColor(.yellow)
+                                    .frame(minWidth: 60, alignment: .center)
+                                    .lineLimit(1)
+                            } else {
+                                Spacer().frame(minWidth: 60)
+                            }
+                            
+                            // Empty space for fourth star
+                            Spacer().frame(width: 44)
+                            
+                            // Good - positioned below fifth star - always show
                             Text("Good")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(Color("green_500"))
-                                .frame(maxWidth: .infinity)
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(.green)
+                                .frame(width: 44, alignment: .center)
                         }
-                        .opacity(0.8)
                     }
                     .padding(.top, 24)
                     .padding(.horizontal, 24)
                     
-                    // Rating Feedback Section (matching Android rating_feedback) - improved presentation with better text handling
+                    // Rating Feedback Section (matching Android rating_feedback) - compact horizontal layout
                     if Int(ratingService.rating) > 0 {
-                        VStack(spacing: 16) {
+                        HStack(spacing: 12) {
                             Text(ratingService.ratingEmoji(for: Int(ratingService.rating)))
-                                .font(.system(size: 48))
+                                .font(.system(size: 32)) // Slightly smaller emoji for horizontal layout
                             
                             // Improved text display with proper line spacing and formatting
                             Text(ratingService.ratingDescription(for: Int(ratingService.rating)))
                                 .font(.system(size: 15, weight: .medium))
                                 .foregroundColor(starColor(for: Int(ratingService.rating)))
-                                .multilineTextAlignment(.center)
-                                .lineSpacing(4)
-                                .padding(.horizontal, 16)
+                                .multilineTextAlignment(.leading)
+                                .lineSpacing(2)
                                 .fixedSize(horizontal: false, vertical: true) // Allow proper text wrapping
                         }
-                        .padding(.top, 24)
+                        .padding(.top, 20) // Reduced padding for more compact layout
                         .padding(.horizontal, 20)
                         .transition(.scale.combined(with: .opacity))
                     }
@@ -199,10 +215,10 @@ struct RatingPopupView: View {
     /// Get star color based on rating - matches Android updateStars() logic
     private func starColor(for rating: Int) -> Color {
         switch rating {
-        case 1, 2: return Color("red_500")
-        case 3: return Color("orange_500")
-        case 4, 5: return Color("green_500")
-        default: return Color("grey_500")
+        case 1, 2: return .red
+        case 3: return .yellow
+        case 4, 5: return .green
+        default: return Color.gray
         }
     }
     

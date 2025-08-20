@@ -46,13 +46,11 @@ struct SettingsTabView: View {
         SettingsRow(title: "Haptics",                iconName: "hand.raised", isDestructive: false, showsChevron: true,  category: .navigation),
         SettingsRow(title: "Unblock",                iconName: "unblock",          isDestructive: false, showsChevron: true,  category: .navigation),
         SettingsRow(title: "Welcome Screen",         iconName: "welcome",          isDestructive: false, showsChevron: true,  category: .navigation),
+        SettingsRow(title: "Send feedback",          iconName: "message.badge",    isDestructive: false, showsChevron: true,  category: .navigation),
         
         // CATEGORY 2: Action items (perform functions/show popups)
-        SettingsRow(title: "Update interests",       iconName: "filters",          isDestructive: false, showsChevron: false, category: .actions),
-        SettingsRow(title: "Fix the app",            iconName: "settings",         isDestructive: false, showsChevron: false, category: .actions),
         SettingsRow(title: "Share the app",          iconName: "shares",           isDestructive: false, showsChevron: false, category: .actions),
         SettingsRow(title: "Rate the app",           iconName: "star",             isDestructive: false, showsChevron: false, category: .actions),
-        SettingsRow(title: "Send feedback",          iconName: "message.badge",    isDestructive: false, showsChevron: false, category: .actions),
         SettingsRow(title: "Contact us",             iconName: "mail",             isDestructive: false, showsChevron: false, category: .actions),
         
         // CATEGORY 3: Destructive action
@@ -158,9 +156,7 @@ struct SettingsTabView: View {
             updateWarningsSection()
             updateAccountCreationStatus()
         }
-        .sheet(isPresented: $ratingService.navigateToFeedback) {
-            FeedbackView()
-        }
+
         .background(
             NavigationLink(
                 destination: MyProfileView(),
@@ -421,24 +417,10 @@ struct SettingsTabView: View {
         AppLogger.log(tag: "LOG-APP: SettingsTabView", message: "onRowTap() tapped: \(row.title)")
 
         switch row.title {
-        case "Update interests":
-            // Navigate user to Edit Profile interests section instead
-            navigateToMyProfile = true
-            AppLogger.log(tag: "LOG-APP: SettingsTabView", message: "updateInterestsTapped() navigating to MyProfileView")
         case "Share the app":
             shareApp()
         case "Rate the app":
             ratingService.showRatingDialog = true
-        case "Send feedback":
-            ratingService.ratingMessage = "We'd love to hear from you! Please share your thoughts, suggestions, or report any issues."
-            ratingService.navigateToFeedback = true
-            AppLogger.log(tag: "LOG-APP: SettingsTabView", message: "sendFeedbackTapped() navigating to feedback view")
-        case "Fix the app":
-            NavigationManager.shared.showFixAppPopup {
-                // Optional: Add any post-fix actions here
-                AppLogger.log(tag: "LOG-APP: SettingsTabView", message: "fixAppCompleted() fix process completed")
-            }
-            AppLogger.log(tag: "LOG-APP: SettingsTabView", message: "fixAppTapped() showing fix app popup")
         case "Contact us":
             showContactUsAlert()
             AppLogger.log(tag: "LOG-APP: SettingsTabView", message: "contactUsTapped() showing support email alert")
@@ -517,6 +499,8 @@ struct SettingsTabView: View {
             BlockedUsersView()
         case "Welcome Screen":
             WelcomeView()
+        case "Send feedback":
+            FeedbackView()
         case "Remove Account":
             RemoveAccountView()
         default:

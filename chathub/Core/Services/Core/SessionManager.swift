@@ -723,6 +723,22 @@ class SessionManager: ObservableObject {
         set { defaults.set(newValue, forKey: Keys.aiChatEnabledWoman) }
     }
     
+    // AI API Key storage (reuses existing UserDefaults system; mirrors Android credentials usage)
+    var aiApiKey: String? {
+        get {
+            return defaults.string(forKey: "hugging_face_api_key") ?? defaults.string(forKey: "AI_API_KEY")
+        }
+        set {
+            if let value = newValue, !value.isEmpty {
+                defaults.set(value, forKey: "hugging_face_api_key")
+                defaults.set(value, forKey: "AI_API_KEY")
+            } else {
+                defaults.removeObject(forKey: "hugging_face_api_key")
+                defaults.removeObject(forKey: "AI_API_KEY")
+            }
+        }
+    }
+
     var maxIdleSecondsForAiChatEnabling: Int64 {
         get { defaults.object(forKey: Keys.maxIdleSecondsForAiChatEnabling) as? Int64 ?? 0 }
         set { defaults.set(newValue, forKey: Keys.maxIdleSecondsForAiChatEnabling) }
@@ -734,20 +750,343 @@ class SessionManager: ObservableObject {
     }
     
     var aiChatBotURL: String? {
-        get { defaults.string(forKey: Keys.aiChatBotURL) }
-        set { defaults.set(newValue, forKey: Keys.aiChatBotURL) }
+        get {
+            // Prefer normalized key; fallback to legacy key for backward compatibility
+            return defaults.string(forKey: AppSettingsKeys.aiChatBotURL) ?? defaults.string(forKey: Keys.aiChatBotURL)
+        }
+        set {
+            if let value = newValue {
+                // Keep both keys in sync
+                defaults.set(value, forKey: Keys.aiChatBotURL)
+                defaults.set(value, forKey: AppSettingsKeys.aiChatBotURL)
+            } else {
+                defaults.removeObject(forKey: Keys.aiChatBotURL)
+                defaults.removeObject(forKey: AppSettingsKeys.aiChatBotURL)
+            }
+        }
     }
     
-    /// Gets AI cooldown time - Android getAiCoolOffTime() equivalent
-    func getAiCoolOffTime() -> Int64 {
-        return Int64(defaults.integer(forKey: "aiCoolOffTime"))
+    /// Gets AI last failure time - Android getAiCoolOffTime() equivalent
+    /// Returns timestamp when AI last failed (used to prevent rapid retry attempts)
+    func getAiLastFailureTime() -> Int64 {
+        return Int64(defaults.integer(forKey: "aiLastFailureTime"))
     }
     
-    /// Sets AI cooldown time - Android setAiCoolOffTime() equivalent
-    func setAiCoolOffTime(_ time: Int64) {
-        defaults.set(Int(time), forKey: "aiCoolOffTime")
+    /// Sets AI last failure time - Android setAiCoolOffTime() equivalent  
+    /// Called when AI requests fail to implement 60-second retry block
+    func setAiLastFailureTime(_ time: Int64) {
+        defaults.set(Int(time), forKey: "aiLastFailureTime")
         defaults.synchronize()
-        AppLogger.log(tag: "LOG-APP: SessionManager", message: "setAiCoolOffTime() cooldown set to: \(time)")
+        AppLogger.log(tag: "LOG-APP: SessionManager", message: "setAiLastFailureTime() failure timestamp set to: \(time)")
+    }
+    
+    /// Legacy methods for backward compatibility - use new names above
+    @available(*, deprecated, message: "Use getAiLastFailureTime() instead")
+    func getAiCoolOffTime() -> Int64 {
+        return getAiLastFailureTime()
+    }
+    
+    @available(*, deprecated, message: "Use setAiLastFailureTime() instead") 
+    func setAiCoolOffTime(_ time: Int64) {
+        setAiLastFailureTime(time)
+    }
+    
+    // MARK: - Comprehensive AI Takeover Decision
+    
+    /**
+     * Single comprehensive method to determine if AI should take over
+     * 
+     * This method includes ALL 7 conditions:
+     * 1. Other user ID validation
+     * 2. Gender-specific AI chat enabled check  
+     * 3. Time elapsed since last message
+     * 4. Failure recovery period expired
+     * 5. Geographic safety (same city/IP blocking)
+     * 6. Other user online/offline status
+     * 7. Recent offline timing for offline users
+     * 
+     * @param otherUserId: The ID of the other user
+     * @param otherUserProfile: Profile data for the other user (optional)
+     * @param otherUserIpAddress: IP address of other user (optional)
+     * @param otherUserLastSeenTime: Last seen timestamp (optional)
+     * @param contextTag: Logging tag to identify caller
+     * 
+     * @return true if AI should take over, false otherwise
+     */
+    func shouldAiTakeOver(
+        otherUserId: String,
+        otherUserProfile: UserCoreDataReplacement? = nil,
+        otherUserIpAddress: String? = nil,
+        otherUserLastSeenTime: Double = 0,
+        contextTag: String = "SessionManager"
+    ) -> Bool {
+        
+        // LOG ALL INPUT VALUES
+        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() 📋 INPUT VALUES:")
+        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "  📌 otherUserId: '\(otherUserId)'")
+        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "  📌 otherUserProfile: \(otherUserProfile != nil ? "PROVIDED" : "nil")")
+        if let profile = otherUserProfile {
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "    - isOnline: \(profile.isOnline ?? false)")
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "    - gender: '\(profile.gender ?? "nil")'")
+        }
+        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "  📌 otherUserIpAddress: '\(otherUserIpAddress ?? "nil")'")
+        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "  📌 otherUserLastSeenTime: \(otherUserLastSeenTime) (\(otherUserLastSeenTime > 0 ? "\(Int(Date().timeIntervalSince1970 - otherUserLastSeenTime))s ago" : "unknown"))")
+        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "  📌 contextTag: '\(contextTag)'")
+        
+        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() 🔍 STARTING comprehensive AI takeover evaluation")
+        
+        // Helper function to log final result
+        func logFinalResult(_ result: Bool, reason: String) -> Bool {
+            let emoji = result ? "✅ SUCCESS" : "❌ FAILED"
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() 🏁 FINAL RESULT: \(emoji) - \(reason)")
+            return result
+        }
+        
+        // 1. OTHER USER ID VALIDATION
+        guard !otherUserId.isEmpty else {
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ❌ FAILED: otherUserId is empty")
+            return logFinalResult(false, reason: "Empty otherUserId")
+        }
+        
+        // 2. GENDER-SPECIFIC AI CHAT ENABLED CHECK  
+        let userGender = self.userGender ?? "nil"
+        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() gender check - userGender: '\(userGender)', aiChatEnabled(male): \(self.aiChatEnabled), aiChatEnabledWoman(female): \(aiChatEnabledWoman)")
+        
+        var aiChatEnabled = false
+        if userGender.lowercased() == "male" {
+            aiChatEnabled = self.aiChatEnabled  // Male users
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() male user detected, using aiChatEnabled: \(aiChatEnabled)")
+        } else if userGender.lowercased() == "female" {
+            aiChatEnabled = aiChatEnabledWoman  // Female users  
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() female user detected, using aiChatEnabledWoman: \(aiChatEnabled)")
+        } else {
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() unknown/nil gender, defaulting to male settings")
+            aiChatEnabled = self.aiChatEnabled  // Default to male settings for unknown gender
+        }
+        
+        guard aiChatEnabled else {
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ❌ FAILED: AI chat disabled for gender '\(userGender)' - enable AI chat in settings")
+            return false
+        }
+        
+        // 3. TIME ELAPSED SINCE LAST MESSAGE
+        let timeElapsedSinceLastMessageReceived = Date().timeIntervalSince1970 - Double(lastMessageReceivedTime)
+        let maxIdleTime = Double(maxIdleSecondsForAiChatEnabling)
+        
+        guard timeElapsedSinceLastMessageReceived > maxIdleTime else {
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ❌ FAILED: Not enough idle time: \(timeElapsedSinceLastMessageReceived)s <= \(maxIdleTime)s")
+            return false
+        }
+        
+        // 4. FAILURE RECOVERY PERIOD EXPIRED
+        let currentTime = Date().timeIntervalSince1970
+        let lastFailureTime = getAiLastFailureTime()
+        let failureRecoveryExpired = (lastFailureTime + 60) < Int64(currentTime)
+        
+        guard failureRecoveryExpired else {
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ❌ FAILED: Still in failure recovery period (\(60 - (Int64(currentTime) - lastFailureTime))s remaining)")
+            return false
+        }
+        
+        // 5. GEOGRAPHIC SAFETY (Same City/IP Blocking)
+        if let profile = otherUserProfile {
+            let myCity = getUserRetrievedCity()
+            let otherUserCity = profile.city?.replacingOccurrences(of: "Around ", with: "") ?? ""
+            let sameCity = myCity != nil && !myCity!.isEmpty && !otherUserCity.isEmpty && 
+                          myCity!.caseInsensitiveCompare(otherUserCity) == .orderedSame
+            
+            // Check IP address similarity (first 3 octets)
+            let myIpAddress = getUserRetrievedIp()
+            var sameIpAddress = false
+            
+            if let myIp = myIpAddress, let otherIp = otherUserIpAddress,
+               !myIp.isEmpty && !otherIp.isEmpty {
+                let myIpParts = myIp.components(separatedBy: ".")
+                let otherIpParts = otherIp.components(separatedBy: ".")
+                
+                if myIpParts.count >= 3 && otherIpParts.count >= 3 {
+                    sameIpAddress = myIpParts[0] == otherIpParts[0] && 
+                                   myIpParts[1] == otherIpParts[1] && 
+                                   myIpParts[2] == otherIpParts[2]
+                }
+            }
+            
+            // Block AI if users are from same city or have same IP (safety feature)
+            if sameCity || sameIpAddress {
+                AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ❌ FAILED: Geographic safety block - sameCity=\(sameCity), sameIpAddress=\(sameIpAddress)")
+                return false
+            }
+            
+            // 6. OTHER USER ONLINE/OFFLINE STATUS
+            // Use profile.isOnline if available, otherwise fallback to lastSeenTime logic
+            let otherUserOnline = profile.isOnline ?? (otherUserLastSeenTime == 0 || 
+                                 (Date().timeIntervalSince1970 - otherUserLastSeenTime) < 30)
+            
+            if otherUserOnline {
+                // User is online - all conditions met
+                AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ✅ SUCCESS: Online user, all conditions met")
+                return true
+            } else {
+                // 7. RECENT OFFLINE TIMING FOR OFFLINE USERS
+                if otherUserLastSeenTime > 0 {
+                    let recentlyOffline = (otherUserLastSeenTime + Double(minOfflineSecondsForAiChatEnabling)) > currentTime
+                    
+                    if recentlyOffline {
+                        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ✅ SUCCESS: Offline user recently seen, all conditions met")
+                        return true
+                    } else {
+                        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ❌ FAILED: Offline user not recently seen (\(Int(currentTime - otherUserLastSeenTime))s ago)")
+                        return false
+                    }
+                } else {
+                    // No last seen data - gracefully allow (assume recently offline)
+                    AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ✅ SUCCESS: Offline user, no last seen data - gracefully allowing")
+                    return true
+                }
+            }
+        } else {
+            // No profile data available - basic conditions already passed, allow AI takeover
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ✅ SUCCESS: No profile data available, basic conditions met - allowing")
+            return true
+        }
+    }
+    
+    /// Comprehensive AI Takeover Decision Function (UserProfile overload)
+    /// 
+    /// This is an overload for ProfileView which uses UserProfile instead of UserCoreDataReplacement.
+    /// Delegates to the main shouldAiTakeOver method after extracting relevant data.
+    ///
+    /// @param otherUserId: The ID of the other user
+    /// @param otherUserProfile: Optional UserProfile data from ProfileView
+    /// @param otherUserIpAddress: Optional IP address for geographic safety check
+    /// @param otherUserLastSeenTime: Timestamp of when user was last seen (0 if unknown)
+    /// @param contextTag: Debug context ("ProfileView" or "ChatFlowManager")
+    /// @returns: Bool indicating if AI should take over
+    func shouldAiTakeOver(
+        otherUserId: String,
+        otherUserProfile: UserProfile?,
+        otherUserIpAddress: String?,
+        otherUserLastSeenTime: Double,
+        contextTag: String
+    ) -> Bool {
+        
+        // LOG ALL INPUT VALUES FOR USERPROFILE OVERLOAD
+        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() (UserProfile overload) 📋 INPUT VALUES:")
+        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "  📌 otherUserId: '\(otherUserId)'")
+        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "  📌 otherUserProfile: \(otherUserProfile != nil ? "PROVIDED" : "nil")")
+        if let profile = otherUserProfile {
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "    - isOnline: \(profile.isOnline)")
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "    - gender: '\(profile.gender)'")
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "    - lastLoginTime: \(profile.lastLoginTime.dateValue())")
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "    - ipAddress: '\(profile.ipAddress ?? "nil")'")
+        }
+        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "  📌 otherUserIpAddress: '\(otherUserIpAddress ?? "nil")'")
+        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "  📌 otherUserLastSeenTime: \(otherUserLastSeenTime) (\(otherUserLastSeenTime > 0 ? "\(Int(Date().timeIntervalSince1970 - otherUserLastSeenTime))s ago" : "unknown"))")
+        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "  📌 contextTag: '\(contextTag)'")
+        
+        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() (UserProfile overload) 🔍 STARTING evaluation")
+        
+        // Helper function to log final result for UserProfile overload
+        func logUserProfileFinalResult(_ result: Bool, reason: String) -> Bool {
+            let emoji = result ? "✅ SUCCESS" : "❌ FAILED"
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() (UserProfile overload) 🏁 FINAL RESULT: \(emoji) - \(reason)")
+            return result
+        }
+        
+        // 1. OTHER USER ID VALIDATION
+        guard !otherUserId.isEmpty else {
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ❌ FAILED: otherUserId is empty")
+            return logUserProfileFinalResult(false, reason: "Empty otherUserId")
+        }
+        
+        // 2. GENDER-SPECIFIC AI CHAT ENABLED CHECK  
+        let userGender = self.userGender ?? "nil"
+        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() gender check - userGender: '\(userGender)', aiChatEnabled(male): \(self.aiChatEnabled), aiChatEnabledWoman(female): \(aiChatEnabledWoman)")
+        
+        var aiChatEnabled = false
+        if userGender.lowercased() == "male" {
+            aiChatEnabled = self.aiChatEnabled  // Male users
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() male user detected, using aiChatEnabled: \(aiChatEnabled)")
+        } else if userGender.lowercased() == "female" {
+            aiChatEnabled = aiChatEnabledWoman  // Female users  
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() female user detected, using aiChatEnabledWoman: \(aiChatEnabled)")
+        } else {
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() unknown/nil gender, defaulting to male settings")
+            aiChatEnabled = self.aiChatEnabled  // Default to male settings for unknown gender
+        }
+        
+        guard aiChatEnabled else {
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ❌ FAILED: AI chat disabled for gender '\(userGender)' - enable AI chat in settings")
+            return false
+        }
+        
+        // 3. TIME ELAPSED SINCE LAST MESSAGE
+        let timeElapsedSinceLastMessageReceived = Date().timeIntervalSince1970 - Double(lastMessageReceivedTime)
+        let maxIdleTime = Double(maxIdleSecondsForAiChatEnabling)
+        
+        guard timeElapsedSinceLastMessageReceived > maxIdleTime else {
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ❌ FAILED: Not enough idle time: \(timeElapsedSinceLastMessageReceived)s <= \(maxIdleTime)s")
+            return false
+        }
+        
+        // 4. FAILURE RECOVERY PERIOD EXPIRED
+        let currentTime = Date().timeIntervalSince1970
+        let lastFailureTime = getAiLastFailureTime()
+        let failureRecoveryExpired = (lastFailureTime + 60) < Int64(currentTime)
+        
+        guard failureRecoveryExpired else {
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ❌ FAILED: Still in failure recovery period (\(60 - (Int64(currentTime) - lastFailureTime))s remaining)")
+            return false
+        }
+        
+        // 5. GEOGRAPHIC SAFETY (Same City/IP Blocking) - For UserProfile
+        if let profile = otherUserProfile {
+            let myCity = getUserRetrievedCity()
+            let otherUserCity = profile.city?.replacingOccurrences(of: " ", with: "").lowercased()
+            let sameCity = myCity != nil && !myCity!.isEmpty && otherUserCity != nil && !otherUserCity!.isEmpty && 
+                          myCity!.lowercased() == otherUserCity!
+            
+            let myIpAddress = getUserRetrievedIp()
+            let sameIpAddress = myIpAddress != nil && !myIpAddress!.isEmpty && 
+                               otherUserIpAddress != nil && !otherUserIpAddress!.isEmpty &&
+                               myIpAddress == otherUserIpAddress
+            
+            // Block AI if users are from same city or have same IP (safety feature)
+            if sameCity || sameIpAddress {
+                AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ❌ FAILED: Geographic safety block - sameCity=\(sameCity), sameIpAddress=\(sameIpAddress)")
+                return false
+            }
+            
+            // 6. OTHER USER ONLINE/OFFLINE STATUS - UserProfile has direct isOnline property
+            let otherUserOnline = profile.isOnline
+            
+            if otherUserOnline {
+                // User is online - all conditions met
+                AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ✅ SUCCESS: Online user, all conditions met")
+                return true
+            } else {
+                // 7. RECENT OFFLINE TIMING FOR OFFLINE USERS
+                if otherUserLastSeenTime > 0 {
+                    let recentlyOffline = (otherUserLastSeenTime + Double(minOfflineSecondsForAiChatEnabling)) > currentTime
+                    
+                    if recentlyOffline {
+                        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ✅ SUCCESS: Offline user recently seen, all conditions met")
+                        return true
+                    } else {
+                        AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ❌ FAILED: Offline user not recently seen (\(Int(currentTime - otherUserLastSeenTime))s ago)")
+                        return false
+                    }
+                } else {
+                    // No last seen data - gracefully allow (assume recently offline)
+                    AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ✅ SUCCESS: Offline user, no last seen data - gracefully allowing")
+                    return true
+                }
+            }
+        } else {
+            // No profile data available - basic conditions already passed, allow AI takeover
+            AppLogger.log(tag: "LOG-APP: \(contextTag)", message: "shouldAiTakeOver() ✅ SUCCESS: No profile data available, basic conditions met - allowing")
+            return true
+        }
     }
     
     // MARK: - Monetization and Limits Settings
@@ -1165,7 +1504,7 @@ class SessionManager: ObservableObject {
     
     /// Android parity method - delegates to SubscriptionSessionManager
     func isUserSubscribedToPro() -> Bool {
-        return SubscriptionSessionManager.shared.isUserSubscribedToPro()
+        return SubscriptionSessionManager.shared.hasProTier()
     }
     
     // MARK: - Message Tracking
@@ -1768,12 +2107,13 @@ class SessionManager: ObservableObject {
     
     /// Gets AI chatbot URL - Android getAiChatBotURL() equivalent
     func getAiChatBotURL() -> String? {
-        return defaults.string(forKey: AppSettingsKeys.aiChatBotURL)
+        return defaults.string(forKey: AppSettingsKeys.aiChatBotURL) ?? defaults.string(forKey: Keys.aiChatBotURL)
     }
     
     /// Sets AI chatbot URL - Android setAiChatBotURL() equivalent
     func setAiChatBotURL(_ url: String) {
         defaults.set(url, forKey: AppSettingsKeys.aiChatBotURL)
+        defaults.set(url, forKey: Keys.aiChatBotURL)
         synchronize()
         AppLogger.log(tag: "LOG-APP: SessionManager", message: "setAiChatBotURL() URL set to: \(url)")
     }

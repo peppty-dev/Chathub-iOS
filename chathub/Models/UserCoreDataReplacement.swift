@@ -210,4 +210,12 @@ extension UserCoreDataReplacement {
         // For now, return nil as gender preference is not stored in current schema
         return nil
     }
+    
+    // MARK: - Online Status Property
+    
+    var isOnline: Bool? {
+        // For now, return nil as online status is not stored in current schema
+        // This will be handled by the shouldAiTakeOver logic using otherUserLastSeenTime
+        return nil
+    }
 } 

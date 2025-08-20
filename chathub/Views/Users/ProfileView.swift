@@ -112,14 +112,12 @@ struct ProfileView: View {
     @State private var conversationFlowSessionId: String?
     @State private var conversationFlowStartTime: Date?
     
-    // MARK: - AI Detection (Debug Support)
+    // MARK: - AI Detection (Debug Support)  
     @State private var otherUserIpAddress: String?
     @State private var otherUserLastSeenTime: Double = 0
     
-    private var shouldShowAIIndicator: Bool {
-        // Show AI indicator if AI takeover is likely to happen based on current conditions
-        return shouldAiTakeOver()
-    }
+    // SMART AI INDICATOR: Show only after actual calculation
+    // AI takeover indicator and pre-check removed; single AI decision is made during chat creation
 
     var body: some View {
         ZStack {
@@ -582,14 +580,9 @@ struct ProfileView: View {
                                 .multilineTextAlignment(.center)
                                 .lineLimit(2)
                             
-                            // DEBUG ONLY: AI indicator dot (skeleton state)
-                            #if DEBUG
-                            if shouldShowAIIndicator {
-                                Circle()
-                                    .fill(Color.red)
-                                    .frame(width: 8, height: 8)
-                            }
-                            #endif
+                            // DEBUG ONLY: AI indicator dot (skeleton state) - REMOVED
+                            // AI takeover now calculated only when starting conversation
+                            // No need for indicator during loading state
                         }
                     } else {
                         Spacer()
@@ -733,14 +726,7 @@ struct ProfileView: View {
                             .multilineTextAlignment(.center)
                             .lineLimit(2)
                         
-                        // DEBUG ONLY: AI indicator dot
-                        #if DEBUG
-                        if shouldShowAIIndicator {
-                            Circle()
-                                .fill(Color.red)
-                                .frame(width: 8, height: 8)
-                        }
-                        #endif
+                        // AI indicator removed; no visual dot beside user name
                     }
                     
                     // Online status with enhanced styling
@@ -2215,17 +2201,59 @@ struct ProfileView: View {
     }
     
     private func proceedToChat(profile: UserProfile) {
-        // Use the new simplified chat creation logic
+        // AI takeover logic moved to single decision inside ChatFlowManager during chat creation
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "proceedToChat() Proceeding with normal chat creation (AI decision handled by ChatFlowManager)")
+        createRegularChat(profile: profile)
+    }
+    
+    private func createAiChatDirectly(profile: UserProfile) {
+        // Create AI chat directly without going through ChatFlowManager AI logic
         let chatFlowCallback = ProfileViewChatFlowCallback(
             onChatCreated: { (chatId: String, otherUserId: String) in
-                AppLogger.log(tag: "LOG-APP: ProfileView", message: "proceedToChat() Chat created successfully: \(chatId)")
+                AppLogger.log(tag: "LOG-APP: ProfileView", message: "createAiChatDirectly() AI Chat created successfully: \(chatId)")
+                
+                // Add to AI chat IDs list
+                var currentAiChatIds = SessionManager.shared.aiChatIds
+                currentAiChatIds.append(chatId)
+                SessionManager.shared.aiChatIds = currentAiChatIds
+                SessionManager.shared.lastMessageReceivedTime = Date().timeIntervalSince1970
+                
+                // Log AI chat creation
+                Analytics.logEvent("app_events", parameters: [
+                    AnalyticsParameterItemName: "ai_chat_created_from_profile"
+                ])
+                
                 DispatchQueue.main.async {
-
                     self.navigateToMessageView(chatId: chatId, otherUserId: otherUserId)
                 }
             },
             onError: { (error: Error) in
-                AppLogger.log(tag: "LOG-APP: ProfileView", message: "proceedToChat() Error: \(error.localizedDescription)")
+                AppLogger.log(tag: "LOG-APP: ProfileView", message: "createAiChatDirectly() Error: \(error.localizedDescription)")
+            }
+        )
+        
+        // Use regular chat creation but we'll handle AI setup ourselves
+        ChatFlowManager.shared.createChat(
+            otherUserId: otherUserId,
+            otherUserName: profile.name,
+            otherUserGender: profile.gender,
+            otherUserImage: profile.profileImage,
+            otherUserDevId: profile.devid,
+            callback: chatFlowCallback
+        )
+    }
+    
+    private func createRegularChat(profile: UserProfile) {
+        // Use the regular chat creation logic
+        let chatFlowCallback = ProfileViewChatFlowCallback(
+            onChatCreated: { (chatId: String, otherUserId: String) in
+                AppLogger.log(tag: "LOG-APP: ProfileView", message: "createRegularChat() Regular chat created successfully: \(chatId)")
+                DispatchQueue.main.async {
+                    self.navigateToMessageView(chatId: chatId, otherUserId: otherUserId)
+                }
+            },
+            onError: { (error: Error) in
+                AppLogger.log(tag: "LOG-APP: ProfileView", message: "createRegularChat() Error: \(error.localizedDescription)")
             }
         )
         
@@ -2245,11 +2273,13 @@ struct ProfileView: View {
         
         guard let profile = userProfile else { return }
         
+        // AI decision handled centrally in ChatFlowManager; proceed with routing decision
+        AppLogger.log(tag: "LOG-APP: ProfileView", message: "executeRoutingDecisionFlow() Proceeding with routing decision (AI handled by ChatFlowManager)")
+        
         let chatFlowCallback = ProfileViewChatFlowCallback(
             onChatCreated: { (chatId: String, otherUserId: String) in
                 AppLogger.log(tag: "LOG-APP: ProfileView", message: "executeRoutingDecisionFlow() Chat created successfully: \(chatId)")
                 DispatchQueue.main.async {
-
                     self.navigateToMessageView(chatId: chatId, otherUserId: otherUserId)
                 }
             },
@@ -2833,88 +2863,7 @@ struct ProfileView: View {
     }
     
     // MARK: - AI Takeover Logic (Android Parity)
-    private func shouldAiTakeOver() -> Bool {
-        AppLogger.log(tag: "LOG-APP: ProfileView", message: "shouldAiTakeOver() checking AI takeover conditions")
-        
-        // Null check for otherUserId (Android OTHERUSERID validation)
-        guard !otherUserId.isEmpty else {
-            AppLogger.log(tag: "LOG-APP: ProfileView", message: "Error: otherUserId is empty in shouldAiTakeOver")
-            return false
-        }
-        
-        let sessionManager = SessionManager.shared
-        let timeElapsedSinceLastMessageReceived = Date().timeIntervalSince1970 - Double(sessionManager.lastMessageReceivedTime)
-        
-        // Check if users are from same city (Android parity)
-        let myCity = sessionManager.getUserRetrievedCity()
-        let otherUserCity = userProfile?.city?.replacingOccurrences(of: "Around ", with: "") ?? ""
-        let sameCity = myCity != nil && !myCity!.isEmpty && !otherUserCity.isEmpty && 
-                      myCity!.caseInsensitiveCompare(otherUserCity) == .orderedSame
-        
-        // Check if users have same IP address (compare first 3 octets for privacy - Android parity)
-        let myIpAddress = sessionManager.getUserRetrievedIp()
-        var sameIpAddress = false
-        
-        if let myIp = myIpAddress, let otherIp = otherUserIpAddress,
-           !myIp.isEmpty && !otherIp.isEmpty {
-            let myIpParts = myIp.components(separatedBy: ".")
-            let otherIpParts = otherIp.components(separatedBy: ".")
-            
-            if myIpParts.count >= 3 && otherIpParts.count >= 3 {
-                sameIpAddress = myIpParts[0] == otherIpParts[0] && 
-                               myIpParts[1] == otherIpParts[1] && 
-                               myIpParts[2] == otherIpParts[2]
-            }
-        }
-        
-        // Get other user online status and last seen time
-        let otherUserOnline = userProfile?.isOnline ?? false
-        let currentTime = Date().timeIntervalSince1970
-        
-        AppLogger.log(tag: "LOG-APP: ProfileView", message: """
-            shouldAiTakeOver() conditions:
-            aiChatEnabled: \(sessionManager.aiChatEnabled)
-            timeElapsed: \(timeElapsedSinceLastMessageReceived)
-            maxIdleTime: \(sessionManager.maxIdleSecondsForAiChatEnabling)
-            otherUserOnline: \(otherUserOnline)
-            aiCoolOffTime: \(sessionManager.getAiCoolOffTime())
-            currentTime: \(currentTime)
-            lastSeenTime: \(otherUserLastSeenTime)
-            minOfflineSeconds: \(sessionManager.minOfflineSecondsForAiChatEnabling)
-            sameCity: \(sameCity) (my: '\(myCity ?? "nil")', other: '\(otherUserCity)')
-            sameIpAddress: \(sameIpAddress) (my: '\(myIpAddress ?? "nil")', other: '\(otherUserIpAddress ?? "nil")')
-            """)
-        
-        var shouldAiTakeOver = false
-        
-        // Only proceed with AI chat check if users are not from same city and don't have same IP (Android parity)
-        if !sameCity && !sameIpAddress {
-            if sessionManager.aiChatEnabled {
-                if timeElapsedSinceLastMessageReceived > Double(sessionManager.maxIdleSecondsForAiChatEnabling) {
-                    let coolOffExpired = (sessionManager.getAiCoolOffTime() + 60) < Int64(currentTime)
-                    
-                    if otherUserOnline {
-                        // User is online - check cooloff time (Android parity)
-                        AppLogger.log(tag: "LOG-APP: ProfileView", message: "shouldAiTakeOver() Online user - coolOffExpired: \(coolOffExpired)")
-                        if coolOffExpired {
-                            shouldAiTakeOver = true
-                        }
-                    } else {
-                        // User is offline - only enable AI if they were recently offline (within minOfflineSeconds) AND cooloff expired (Android parity)
-                        let recentlyOffline = (otherUserLastSeenTime + Double(sessionManager.minOfflineSecondsForAiChatEnabling)) > currentTime
-                        AppLogger.log(tag: "LOG-APP: ProfileView", message: "shouldAiTakeOver() Offline user - recentlyOffline: \(recentlyOffline), coolOffExpired: \(coolOffExpired)")
-                        AppLogger.log(tag: "LOG-APP: ProfileView", message: "shouldAiTakeOver() Calculation: (\(otherUserLastSeenTime) + \(sessionManager.minOfflineSecondsForAiChatEnabling)) > \(currentTime) = \(otherUserLastSeenTime + Double(sessionManager.minOfflineSecondsForAiChatEnabling)) > \(currentTime)")
-                        if recentlyOffline && coolOffExpired {
-                            shouldAiTakeOver = true
-                        }
-                    }
-                }
-            }
-        }
-        
-        AppLogger.log(tag: "LOG-APP: ProfileView", message: "shouldAiTakeOver() result: \(shouldAiTakeOver)")
-        return shouldAiTakeOver
-    }
+    // Moved to SessionManager.shouldAiTakeOver() for consistency
     
     // MARK: - Fetch Other User IP and Last Seen (Android Parity)
     private func fetchOtherUserMetadata() {

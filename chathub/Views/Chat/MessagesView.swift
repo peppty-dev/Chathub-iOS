@@ -7,6 +7,8 @@ import PhotosUI
 
 
 
+
+
 struct MessagesView: View {
     let chatId: String
     let otherUser: ChatUser
@@ -49,8 +51,7 @@ struct MessagesView: View {
     @State private var showToast: Bool = false
     @State private var toastMessage: String = ""
     
-    // MARK: - Screenshot Protection
-    @StateObject private var captureProtection = CaptureProtection()
+
     // Unified Info Gathering System (Periodic pill display)
     private enum InfoGatherContent {
         case interest(phrase: String)
@@ -115,6 +116,20 @@ struct MessagesView: View {
     @State private var aiStatus: String = "offline"
     @State private var aiTypingTimer: Timer? = nil
     @State private var aiStatusTimer: Timer? = nil
+    
+    // Android Parity: AI Status System Variables
+    @State private var aiStatusHandler: Timer? = nil
+    @State private var aiMessageStartHandler: Timer? = nil
+    @State private var currentTypingValue: Int = 0
+    
+    // Android Parity: AI Status Constants
+    private let AI_STATUS_ONLINE = "online"
+    private let AI_STATUS_OFFLINE = "offline"
+    private let AI_STATUS_TYPING = "typing"
+    private let AI_STATUS_HERE = "here"
+    private let AI_STATUS_CHATTING = "chatting"
+    private let AI_STATUS_DIRECTVOICE = "directvoice"
+    private let AI_STATUS_DIRECTVIDEO = "directvideo"
     
     // Notification Permission Integration (New)
     // Notification permission popup removed - now handled in ProfileView
@@ -353,7 +368,7 @@ struct MessagesView: View {
     
     private var messageInputView: some View {
         VStack(spacing: 0) {
-            // Unified periodic info gathering pill
+            // Unified periodic info gathering pill with consistent spacing
             if let content = currentInfoGatherContent {
                 InfoGatherPill(
                     title: content.title,
@@ -362,7 +377,8 @@ struct MessagesView: View {
                     onNo: { handleInfoGatherResponse(content: content, accepted: false) }
                 )
                 .padding(.horizontal, 10)
-                .padding(.vertical, 8)
+                .padding(.top, 8)
+                .padding(.bottom, 8)
                 .transition(.asymmetric(insertion: .move(edge: .top).combined(with: .opacity),
                                         removal: .move(edge: .bottom).combined(with: .opacity)))
             }
@@ -575,7 +591,6 @@ struct MessagesView: View {
                                 .foregroundColor(Color("dark"))
                                 .autocorrectionDisabled(false) // Android Parity: textAutoCorrect enabled
                                 .textInputAutocapitalization(.sentences) // Android Parity: textCapSentences
-                                .textContentType(.none) // Prevent password suggestions, enable word suggestions
                                 .keyboardType(.default) // Ensure default keyboard with word suggestions
                                 .frame(height: textHeight) // Dynamic height - starts at calculated height
                                 .padding(.leading, 10)
@@ -590,7 +605,6 @@ struct MessagesView: View {
                                 .foregroundColor(Color("dark"))
                                 .autocorrectionDisabled(false) // Android Parity: textAutoCorrect enabled
                                 .textInputAutocapitalization(.sentences) // Android Parity: textCapSentences
-                                .textContentType(.none) // Prevent password suggestions, enable word suggestions
                                 .keyboardType(.default) // Ensure default keyboard with word suggestions
                                 .frame(height: textHeight) // Dynamic height - starts at calculated height
                                 .padding(.leading, 10)
@@ -804,18 +818,16 @@ struct MessagesView: View {
                     showUserProfile = true
                 }) {
                     HStack(spacing: 4) {
-                        Text(isAIChat ? "\(otherUser.name)." : otherUser.name)
+                        Text(otherUser.name)
                             .font(.system(size: 18, weight: .semibold))
                             .foregroundColor(Color("dark"))
                         
-                        // DEBUG ONLY: AI indicator dot
-                        #if DEBUG
+                        // Keep only the red dot as the sole AI indicator beside username
                         if isAIChat {
                             Circle()
                                 .fill(Color.red)
                                 .frame(width: 6, height: 6)
                         }
-                        #endif
                     }
                     .padding(.leading, 12) // larger spacing between badge and username
                 }
@@ -967,7 +979,7 @@ struct MessagesView: View {
             toastOverlays
         }
         .overlay(overlayViews)
-        .effectiveScreenshotBlock() // Apply effective screenshot prevention
+
         .navigationTitle("")
         .navigationBarTitleDisplayMode(.inline)
         .navigationBarBackButtonHidden(false)
@@ -992,9 +1004,7 @@ struct MessagesView: View {
         }
         .onAppear(perform: handleViewAppear)
         .onDisappear(perform: handleViewDisappear)
-        .onReceive(NotificationCenter.default.publisher(for: NSNotification.Name("ScreenshotAttemptDetected"))) { notification in
-            handleScreenshotAttempt(notification)
-        }
+
     }
     
     // MARK: - Lifecycle Methods
@@ -1002,9 +1012,7 @@ struct MessagesView: View {
     private func handleViewAppear() {
         AppLogger.log(tag: "LOG-APP: MessagesView", message: "MessagesView onAppear() - ensuring scroll to bottom for latest messages")
         
-        // MARK: - Screenshot Protection Setup
-        captureProtection.start()
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "Effective screenshot prevention enabled - content embedded in secure field")
+
         
         // Reset dismissal flags
         isViewBeingDismissed = false
@@ -1499,6 +1507,10 @@ struct MessagesView: View {
         aiTypingTimer?.invalidate()
         aiStatusTimer?.invalidate()
         
+        // Android Parity: Cleanup AI status handlers
+        aiStatusHandler?.invalidate()
+        aiMessageStartHandler?.invalidate()
+        
         // Cleanup direct call timers (Android Parity)
         liveTimer?.invalidate()
         
@@ -1621,28 +1633,48 @@ struct MessagesView: View {
     /// Helper: Mark our sent messages as seen locally, optionally only up to a cutoff time
     private func markSentMessagesAsSeenLocally(upTo cutoff: Date?) {
         var updatedCount = 0
+        var updatedMessageIds: [String] = []
+        
         for i in 0..<messages.count {
             guard messages[i].isFromCurrentUser else { continue }
             if let cutoff = cutoff, messages[i].timestamp > cutoff { continue }
             if messages[i].isMessageSeen { continue }
             messages[i].isMessageSeen = true
             messageSeenMap[messages[i].id] = true
+            updatedMessageIds.append(messages[i].id)
             updatedCount += 1
         }
+        
         AppLogger.log(tag: "LOG-APP: MessagesView", message: "markSentMessagesAsSeenLocally() Marked \(updatedCount) sent messages as seen locally")
+        
+        // Android Parity: Persist all seen status updates to local database in batch
+        if !updatedMessageIds.isEmpty {
+            MessagesDB.shared.updateMultipleMessageSeenStatus(messageIds: updatedMessageIds, isMessageSeen: true)
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "markSentMessagesAsSeenLocally() Persisted \(updatedMessageIds.count) seen status updates to database")
+        }
     }
     
     /// Update local message objects to reflect seen status for SENT messages only
     private func updateLocalMessageSeenStatus() {
         var updated = 0
+        var updatedMessageIds: [String] = []
+        
         for i in 0..<messages.count {
             if messages[i].isFromCurrentUser && !messages[i].isMessageSeen {
                 messages[i].isMessageSeen = true
                 messageSeenMap[messages[i].id] = true
+                updatedMessageIds.append(messages[i].id)
                 updated += 1
             }
         }
+        
         AppLogger.log(tag: "LOG-APP: MessagesView", message: "updateLocalMessageSeenStatus() Updated local seen status for \(updated) sent messages")
+        
+        // Android Parity: Persist all seen status updates to local database in batch
+        if !updatedMessageIds.isEmpty {
+            MessagesDB.shared.updateMultipleMessageSeenStatus(messageIds: updatedMessageIds, isMessageSeen: true)
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "updateLocalMessageSeenStatus() Persisted \(updatedMessageIds.count) seen status updates to database")
+        }
     }
     
     /// Update local database to mark chat as read (Android Parity)
@@ -1724,14 +1756,14 @@ struct MessagesView: View {
         
         // Convert MessageData to ChatMessage
         let chatMessages = messageDataArray.map { messageData in
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "loadMessagesFromLocalDatabase() Converting MessageData: id=\(messageData.docId), text=\(messageData.message.prefix(20))..., senderId=\(messageData.senderId)")
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "loadMessagesFromLocalDatabase() Converting MessageData: id=\(messageData.docId), text=\(messageData.message.prefix(20))..., senderId=\(messageData.senderId), messageSeen=\(messageData.messageSeen)")
             
             return ChatMessage(
                 id: messageData.docId,
                 text: messageData.message,
                 isFromCurrentUser: messageData.senderId == self.currentUserId,
                 timestamp: Date(timeIntervalSince1970: TimeInterval(messageData.sendDate)),
-                isMessageSeen: false, // Will be updated by Firebase listener
+                isMessageSeen: messageData.messageSeen == 1, // Android Parity: Use locally stored seen status
                 hasAd: messageData.adAvailable == 1,
                 actualMessage: messageData.message,
                 isPremium: messageData.premium == 1,
@@ -1845,6 +1877,7 @@ struct MessagesView: View {
         let sendDate = Int((data["message_time_stamp"] as? Timestamp)?.seconds ?? Int64(Date().timeIntervalSince1970))
         let adAvailable = data["message_ad_available"] as? Bool ?? false ? 1 : 0
         let premium = data["message_premium"] as? Bool ?? false ? 1 : 0
+        let messageSeen = data["message_seen"] as? Bool ?? false ? 1 : 0 // Android Parity: Store seen status from Firebase
         
         // CRITICAL FIX: Check database readiness before saving
         guard DatabaseManager.shared.isDatabaseReady() else {
@@ -1884,6 +1917,7 @@ struct MessagesView: View {
                 docId: messageId,
                 adAvailable: adAvailable,
                 premium: premium,
+                messageSeen: messageSeen, // Android Parity: Include seen status in database
                 db: db
             )
             
@@ -2776,10 +2810,13 @@ struct MessagesView: View {
     
     private func startAITypingTimer() {
         aiTypingTimer?.invalidate()
-        aiStatus = "typing"
+        
+        // Android Parity: Set typing status and update display
+        aiStatus = AI_STATUS_TYPING
+        updateUserStatus()
         
         aiTypingTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
-            triggerAIMessage()
+            self.triggerAIMessage()
         }
     }
     
@@ -2791,16 +2828,6 @@ struct MessagesView: View {
         let conversationHistory = getConversationHistory()
         _ = MessagingSettingsSessionManager.shared.getLastUserMessage(for: chatId) ?? messages.last?.text ?? ""
         
-        let prompt = PromptCreator().createChatPrompt(
-            myProfile: myProfile,
-            otherProfile: otherProfile,
-            conversationHistory: conversationHistory,
-            myInterests: [],
-            myStatus: "",
-            mood: "friendly",
-            similarReply: false
-        )
-        
         guard let otherProfile = getOtherUserProfile() else {
             AppLogger.log(tag: "LOG-APP: MessagesView", message: "triggerAIMessage() Failed to get other user profile")
             aiStatus = "online"
@@ -2809,53 +2836,45 @@ struct MessagesView: View {
         
         // Android Parity: Load credentials like Android getCredentials()
         CredentialsService.shared.loadCredentials()
-        let apiUrl = CredentialsService.shared.getAiApiUrl()
+        var apiUrl = CredentialsService.shared.getAiApiUrl()
+        // Fallback to SessionManager if still empty
+        if apiUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            apiUrl = SessionManager.shared.getAiChatBotURL() ?? ""
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "triggerAIMessage() Fallback used for AI API URL: \(apiUrl)")
+        }
         let apiKey = CredentialsService.shared.getAiApiKey()
         
-        // Android Parity: Use real AI API with credentials
-        AIMessageService.shared.getAiMessage(
-            prompt: prompt,
-            apiUrl: apiUrl,
-            apiKey: apiKey,
+        // Use new structured prompt flow
+        AIMessageService.shared.generateAiMessage(
+            aiApiUrl: apiUrl,
+            aiApiKey: apiKey,
             chatId: chatId,
             otherProfile: otherProfile,
+            myProfile: myProfile,
+            lastTypingTime: Int64(Date().timeIntervalSince1970),
+            isProfanity: false,
             lastAiMessage: lastAIMessage,
-            isProfanity: false
+            currentMessages: conversationHistory,
+            myInterestTags: SimplifiedInterestManager.shared.getCurrentInterests(),
+            otherInterestTags: otherUserInterests
         ) { success in
             DispatchQueue.main.async {
                 if success {
                     AppLogger.log(tag: "LOG-APP: MessagesView", message: "triggerAIMessage() AI message sent successfully")
-                    // Note: The actual message will be received through Firebase listener
-                    // This is just confirmation that the request was processed
+                    // Android Parity: Trigger "received status" after AI message success
+                    self.handleReqReceivedStatus()
                 } else {
                     AppLogger.log(tag: "LOG-APP: MessagesView", message: "triggerAIMessage() AI message failed")
+                    // Android Parity: Go back to main cycling on failure
+                    self.handleDoYourTasksStatus()
                 }
-                aiStatus = "online"
             }
         }
     }
     
     // MARK: - Helper Methods
     
-    // MARK: - Screenshot Protection Methods
-    
-    private func handleScreenshotAttempt(_ notification: Notification) {
-        guard let attemptCount = notification.userInfo?["attemptCount"] as? Int else { return }
-        
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleScreenshotAttempt() - Screenshot attempt #\(attemptCount) blocked in anonymous chat")
-        
-        // No toast needed - screenshot is prevented, so user doesn't need notification
-        // Just log the attempt for analytics/monitoring purposes
-        handleScreenshotResponse()
-    }
-    
-    private func handleScreenshotResponse() {
-        // Additional response to screenshot attempt
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleScreenshotResponse() - Applying additional security measures")
-        
-        // You can add additional security measures here if needed
-        // For example: temporary content blur, logging, etc.
-    }
+
     
     // MARK: - Notification Permission Logic (Moved to ProfileView)
     // Notification permission popup logic has been moved to ProfileView
@@ -2920,7 +2939,19 @@ struct MessagesView: View {
     // MARK: - Android-Style Typing + Here Status (Unique Feature)
     
     private func handleTypingDebounced() {
-        // Only process if not AI chat
+        // Android Parity: Track typing for both AI and real chats
+        if isAIChat {
+            // For AI chats, track currentTypingValue to pause AI status changes
+            currentTypingValue = 1
+            
+            // Reset typing after delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + typingDelay) {
+                self.currentTypingValue = 0
+            }
+            return
+        }
+        
+        // Only process real user typing for non-AI chats
         guard !isAIChat else { return }
         
         // Android-style debounced typing: Leading edge triggers, trailing edge stops
@@ -3150,6 +3181,10 @@ struct MessagesView: View {
                                 if let index = messages.firstIndex(where: { $0.id == messageId }) {
                                     messages[index].isMessageSeen = true
                                 }
+                                
+                                // Android Parity: Persist seen status to local database immediately
+                                MessagesDB.shared.updateMessageSeenStatus(messageId: messageId, isMessageSeen: true)
+                                AppLogger.log(tag: "LOG-APP: MessagesView", message: "setupMessageListener() Persisted seen status to database for message: \(messageId)")
                             }
                         }
                         
@@ -3193,6 +3228,10 @@ struct MessagesView: View {
                                 }
                                 // Persist seen state in map to survive local DB reloads
                                 self.messageSeenMap[messageId] = true
+                                
+                                // Android Parity: Persist seen status update to local database immediately
+                                MessagesDB.shared.updateMessageSeenStatus(messageId: messageId, isMessageSeen: true)
+                                AppLogger.log(tag: "LOG-APP: MessagesView", message: "setupMessageListener() Persisted seen status update to database for message: \(messageId)")
                             }
                         }
                     }
@@ -3371,17 +3410,20 @@ struct MessagesView: View {
     }
     
     private func startAIStatusSimulation() {
-        AppLogger.log(tag: "LOG-APP: MessagesView", message: "startAIStatusSimulation() Starting AI status simulation")
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "startAIStatusSimulation() Starting sophisticated AI status simulation (Android Parity)")
         
-        aiStatus = "online"
-        updateUserStatus() // Update status display (Android Parity)
+        // Start with offline to trigger the full initialization
+        aiStatus = AI_STATUS_OFFLINE
         
-        aiStatusTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { _ in
-            let statuses = ["online", "typing", "offline"]
-            aiStatus = statuses.randomElement() ?? "online"
-            
-            DispatchQueue.main.async {
-                updateUserStatus() // Update status display when AI status changes (Android Parity)
+        // Use the sophisticated handleAIStatus system instead of simple timer
+        handleAIStatus()
+        
+        // Optional: Keep a backup simple timer for edge cases (much longer interval)
+        aiStatusTimer = Timer.scheduledTimer(withTimeInterval: 120.0, repeats: true) { _ in
+            // Only trigger if status seems stuck
+            if self.aiStatus == "" || self.aiStatusHandler == nil {
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "startAIStatusSimulation() Backup timer triggered - restarting AI status")
+                self.handleAIStatus()
             }
         }
     }
@@ -4227,9 +4269,200 @@ struct MessagesView: View {
     
     // Android Parity: Handle AI status updates
     private func handleAIStatus() {
-        // This method handles AI-specific status logic
-        // Implementation would match Android's handleFirstStatus, handleDoYourTasksStatus methods
         AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleAIStatus() AI status handling")
+        
+        // Start with initial status assignment like Android handleFirstStatus()
+        if aiStatus == "offline" || aiStatus.isEmpty {
+            handleFirstStatus()
+        } else {
+            // Continue with current status logic
+            handleStatusTransitions()
+        }
+    }
+    
+    // Android Parity: Initial status assignment (matches Android handleFirstStatus)
+    private func handleFirstStatus() {
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleFirstStatus() Setting initial AI status")
+        
+        // Android Parity: Status distribution matching Android exactly
+        let statuses = [AI_STATUS_ONLINE, AI_STATUS_ONLINE, AI_STATUS_ONLINE, AI_STATUS_ONLINE, AI_STATUS_ONLINE, 
+                       AI_STATUS_CHATTING, AI_STATUS_CHATTING, AI_STATUS_CHATTING, AI_STATUS_CHATTING, 
+                       AI_STATUS_OFFLINE, AI_STATUS_OFFLINE, AI_STATUS_DIRECTVOICE, AI_STATUS_DIRECTVIDEO]
+        
+        aiStatus = statuses.randomElement() ?? AI_STATUS_ONLINE
+        
+        switch aiStatus {
+        case AI_STATUS_OFFLINE:
+            updateUserStatus()
+        case AI_STATUS_ONLINE:
+            updateUserStatus()
+        case AI_STATUS_CHATTING:
+            updateUserStatus()
+        case AI_STATUS_DIRECTVOICE:
+            updateUserStatus()
+        case AI_STATUS_DIRECTVIDEO:
+            updateUserStatus()
+        case AI_STATUS_HERE:
+            updateUserStatus()
+            // Android Parity: Mark as seen when "here"
+            markAsSeenSimulation()
+        default:
+            updateUserStatus()
+        }
+        
+        // Start the status transition logic
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: 3...8)) {
+            self.handleStatusTransitions()
+        }
+    }
+    
+    // Android Parity: Handle status transitions (matches Android handleReqSentStatus/handleDoYourTasksStatus)
+    private func handleStatusTransitions() {
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleStatusTransitions() Current status: \(aiStatus)")
+        
+        // Clear any existing handlers
+        aiStatusHandler?.invalidate()
+        
+        switch aiStatus {
+        case AI_STATUS_OFFLINE, AI_STATUS_DIRECTVOICE, AI_STATUS_DIRECTVIDEO:
+            // Transition to online after random delay
+            let delay = Double.random(in: 3...8)
+            aiStatusHandler = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
+                self.aiStatus = self.AI_STATUS_ONLINE
+                self.updateUserStatus()
+                
+                // Continue transitions
+                DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: 3...8)) {
+                    self.handleStatusTransitions()
+                }
+            }
+            
+        case AI_STATUS_HERE:
+            // Transition from HERE -> TYPING -> HERE (like Android)
+            let delay = Double.random(in: 3...8)
+            aiStatusHandler = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
+                self.aiStatus = self.AI_STATUS_TYPING
+                self.updateUserStatus()
+                
+                // After typing, go back to HERE
+                let typingDelay = Double.random(in: 5...12)
+                self.aiStatusHandler = Timer.scheduledTimer(withTimeInterval: typingDelay, repeats: false) { _ in
+                    self.aiStatus = self.AI_STATUS_HERE
+                    self.updateUserStatus()
+                    self.markAsSeenSimulation()
+                    
+                    // Continue with req sent status
+                    self.handleReqSentStatus()
+                }
+            }
+            
+        case AI_STATUS_TYPING, AI_STATUS_ONLINE:
+            // Transition to HERE after random delay
+            let delay = Double.random(in: 3...8)
+            aiStatusHandler = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
+                self.aiStatus = self.AI_STATUS_HERE
+                self.updateUserStatus()
+                self.markAsSeenSimulation()
+                
+                // After being HERE, go to typing
+                let hereDelay = Double.random(in: 5...12)
+                self.aiStatusHandler = Timer.scheduledTimer(withTimeInterval: hereDelay, repeats: false) { _ in
+                    self.aiStatus = self.AI_STATUS_TYPING
+                    self.updateUserStatus()
+                    
+                    self.handleReqSentStatus()
+                }
+            }
+            
+        case AI_STATUS_CHATTING:
+            // Stay in chatting for a while, then transition
+            let delay = Double.random(in: 8...15)
+            aiStatusHandler = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
+                self.aiStatus = self.AI_STATUS_ONLINE
+                self.updateUserStatus()
+                
+                // Continue transitions
+                DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: 3...8)) {
+                    self.handleStatusTransitions()
+                }
+            }
+            
+        default:
+            // Default transition back to cycling
+            handleDoYourTasksStatus()
+        }
+    }
+    
+    // Android Parity: Handle "request sent" status (matches Android handleReqSentStatus)
+    private func handleReqSentStatus() {
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleReqSentStatus() Setting to HERE status")
+        
+        aiStatus = AI_STATUS_HERE
+        updateUserStatus()
+        markAsSeenSimulation()
+        
+        // Continue with main cycling
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: 2...5)) {
+            self.handleDoYourTasksStatus()
+        }
+    }
+    
+    // Android Parity: Handle "request received" status (matches Android handleReqReceivedStatus)
+    private func handleReqReceivedStatus() {
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleReqReceivedStatus() AI message received, setting to HERE")
+        
+        aiStatus = AI_STATUS_HERE
+        updateUserStatus()
+        markAsSeenSimulation()
+        
+        // Continue with main cycling after a brief delay
+        DispatchQueue.main.asyncAfter(deadline: .now() + Double.random(in: 1...3)) {
+            self.handleDoYourTasksStatus()
+        }
+    }
+    
+    // Android Parity: Main status cycling (matches Android handleDoYourTasksStatus)
+    private func handleDoYourTasksStatus() {
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "handleDoYourTasksStatus() Starting main status cycling")
+        
+        // Clear existing handlers
+        aiStatusHandler?.invalidate()
+        
+        // Skip if user is typing
+        if currentTypingValue == 1 {
+            return
+        }
+        
+        let delay = Double.random(in: 10...20)
+        aiStatusHandler = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { _ in
+            
+            self.aiStatus = self.AI_STATUS_ONLINE
+            self.updateUserStatus()
+            
+            // After being online, switch to chatting
+            let onlineDelay = Double.random(in: 15...25)
+            self.aiStatusHandler = Timer.scheduledTimer(withTimeInterval: onlineDelay, repeats: false) { _ in
+                self.aiStatus = self.AI_STATUS_CHATTING
+                self.updateUserStatus()
+                
+                // Recursive call to continue cycling
+                self.handleDoYourTasksStatus()
+            }
+        }
+    }
+    
+    // Android Parity: Mark as seen simulation (matches Android markAsSeenAsyncTask)
+    private func markAsSeenSimulation() {
+        AppLogger.log(tag: "LOG-APP: MessagesView", message: "markAsSeenSimulation() Simulating message read")
+        
+        // Update last seen time to simulate the AI "reading" the message
+        otherUserLastSeen = Date()
+        
+        // Add a small visual delay to make it feel realistic
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            // This simulates the Android markAsSeenAsyncTask behavior
+            AppLogger.log(tag: "LOG-APP: MessagesView", message: "markAsSeenSimulation() Message marked as seen")
+        }
     }
     
     private func updateUserStatus() {
@@ -4239,13 +4472,21 @@ struct MessagesView: View {
         AppLogger.log(tag: "LOG-APP: MessagesView", message: "DEBUG - Status Variables: isHere=\(isHere), isOtherUserTyping=\(isOtherUserTyping), otherUserIsOnline=\(otherUserIsOnline), otherUserIsPremium=\(otherUserIsPremium)")
         
         if isAIChat {
-            // AI chat logic (unchanged)
+            // AI chat logic (Android Parity)
             switch aiStatus.lowercased() {
-            case "typing":
+            case AI_STATUS_TYPING:
                 currentUserStatus = "Typing…"
-            case "online":
+            case AI_STATUS_ONLINE:
                 currentUserStatus = "Online"
-            case "offline":
+            case AI_STATUS_HERE:
+                currentUserStatus = "In chat"
+            case AI_STATUS_CHATTING:
+                currentUserStatus = "Chatting with someone else...."
+            case AI_STATUS_DIRECTVOICE:
+                currentUserStatus = "On direct voice...."
+            case AI_STATUS_DIRECTVIDEO:
+                currentUserStatus = "On direct video...."
+            case AI_STATUS_OFFLINE:
                 if let lastSeen = otherUserLastSeen {
                     let timeAgo = formatLastSeenTime(lastSeen)
                     currentUserStatus = "Last seen: \(timeAgo) ago"

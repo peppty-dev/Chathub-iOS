@@ -18,9 +18,14 @@ class CredentialsService {
     func loadCredentials() {
         AppLogger.log(tag: "LOG-APP: CredentialsService", message: "loadCredentials() Loading credentials from JSON")
         
+        // Always load AI API URL from SessionManager first (Android parity)
+        aiApiUrl = SessionManager.shared.getAiChatBotURL() ?? ""
+        AppLogger.log(tag: "LOG-APP: CredentialsService", message: "loadCredentials() Session aiApiUrl = \(aiApiUrl)")
+        
+        // Try to read a bundled credentials.json if present
         guard let path = Bundle.main.path(forResource: "credentials", ofType: "json"),
               let data = NSData(contentsOfFile: path) else {
-            AppLogger.log(tag: "LOG-APP: CredentialsService", message: "loadCredentials() credentials.json file not found")
+            AppLogger.log(tag: "LOG-APP: CredentialsService", message: "loadCredentials() credentials.json file not found - using SessionManager value for aiApiUrl")
             return
         }
         
@@ -31,9 +36,23 @@ class CredentialsService {
             }
             
             // Android Parity: Load AI API credentials
-            // AI_API_URL = sessionManager.getAiChatBotURL(); (Android gets from SessionManager)
-            aiApiUrl = SessionManager.shared.getAiChatBotURL() ?? ""
-            aiApiKey = json["hugging_face_api_key"] as? String ?? ""
+            // Prefer SessionManager, but allow JSON to provide/override if present
+            let jsonApiUrl = (json["ai_api_url"] as? String)
+                ?? (json["AI_API_URL"] as? String)
+                ?? (json["aiChatbotUrl"] as? String)
+            if let url = jsonApiUrl, !url.isEmpty { aiApiUrl = url }
+            // API Key: prefer existing, then JSON, then SessionManager
+            if let jsonKey = (
+                json["aiChatbotKey"] as? String ??
+                json["aiChatbotApiKey"] as? String ??
+                json["ai_chatbot_api_key"] as? String ??
+                json["hugging_face_api_key"] as? String
+            ), !jsonKey.isEmpty {
+                aiApiKey = jsonKey
+            }
+            if aiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                aiApiKey = SessionManager.shared.aiApiKey ?? aiApiKey
+            }
             
             // Android Parity: Load AWS credentials
             awsCognitoIdentityPoolId = json["aws_cognito_identity_pool_id_for_chatbot"] as? String ?? ""
@@ -53,6 +72,10 @@ class CredentialsService {
     }
     
     func getAiApiKey() -> String {
+        if aiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            // Runtime fallback to SessionManager if needed
+            return SessionManager.shared.aiApiKey ?? ""
+        }
         return aiApiKey
     }
     

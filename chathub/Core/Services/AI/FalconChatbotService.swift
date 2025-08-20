@@ -203,6 +203,10 @@ extension FalconChatbotService {
         let s1Count = s1Array.count
         let s2Count = s2Array.count
         
+        // Guard against empty strings to avoid invalid ranges (1...0)
+        if s1Count == 0 { return s2Count }
+        if s2Count == 0 { return s1Count }
+        
         var matrix = Array(repeating: Array(repeating: 0, count: s2Count + 1), count: s1Count + 1)
         
         for i in 0...s1Count {

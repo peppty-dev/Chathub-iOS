@@ -445,7 +445,13 @@ class ChatFlowManager {
                 AnalyticsParameterItemName: "ai_chat_opened_from_profile"
             ])
             sessionManager.lastMessageReceivedTime = Date().timeIntervalSince1970
-        } else if shouldAiTakeOver() {
+        } else if sessionManager.shouldAiTakeOver(
+            otherUserId: otherUserId,
+            otherUserProfile: nil as UserCoreDataReplacement?,
+            otherUserIpAddress: nil,
+            otherUserLastSeenTime: 0,
+            contextTag: "ChatFlowManager"
+        ) {
             // Start new AI chat
             var currentAiChatIds = sessionManager.aiChatIds
             currentAiChatIds.append(chatId)
@@ -502,35 +508,7 @@ class ChatFlowManager {
     }
     
     // MARK: - AI Logic (Android Parity)
-    /**
-     * AI takeover check for ChatFlowManager.
-     * 
-     * FIXED: Since ProfileView's shouldAiTakeOver() already validated all conditions
-     * (geo-safety, cooloff times, online/offline logic), and the user was shown the red dot,
-     * ChatFlowManager should trust that validation and enable AI chat immediately.
-     * 
-     * This matches Android architecture where AI chat conversion happens during chat creation
-     * if the conditions were met in the profile view.
-     */
-    private func shouldAiTakeOver() -> Bool {
-        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "shouldAiTakeOver() checking conditions")
-        
-        // Check gender-specific AI chat settings (matching Android)
-        var aiChatEnabled = false
-        if let userGender = sessionManager.keyUserGender, userGender.lowercased() == "male" {
-            aiChatEnabled = sessionManager.aiChatEnabled
-        } else {
-            aiChatEnabled = sessionManager.aiChatEnabledWoman
-        }
-        
-        // If AI is enabled, we trust that ProfileView already did comprehensive validation
-        // and the user saw the red dot indicator before starting this chat
-        let shouldTakeOver = aiChatEnabled
-        
-        AppLogger.log(tag: "LOG-APP: ChatFlowManager", message: "shouldAiTakeOver() aiChatEnabled: \(aiChatEnabled), shouldTakeOver: \(shouldTakeOver)")
-        
-        return shouldTakeOver
-    }
+    // Moved to SessionManager.shouldAiTakeOver() for consistency
     
     // MARK: - AI Messages (Android Parity)
     // NOTE: AI messages are now handled in ProfileView like Android UserProfileActivity

@@ -47,6 +47,15 @@ class DeleteChatService {
                 
                 AppLogger.log(tag: "LOG-APP: DeleteChatService", message: "deleteChat() successfully deleted chat: \(chatId)")
                 
+                // Also remove from AI chat IDs if present
+                var ids = self.sessionManager.aiChatIds
+                let trimmed = chatId.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let index = ids.firstIndex(of: trimmed) {
+                    ids.remove(at: index)
+                    self.sessionManager.aiChatIds = ids
+                    AppLogger.log(tag: "LOG-APP: DeleteChatService", message: "deleteChat() removed chatId from aiChatIds: \(trimmed)")
+                }
+                
                 DispatchQueue.main.async {
                     completion(true)
                 }

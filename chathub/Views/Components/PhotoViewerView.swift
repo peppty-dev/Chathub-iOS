@@ -161,12 +161,8 @@ struct PhotoViewerView: View {
         .onAppear {
             loadCurrentUserData()
             checkIfImageReported()
-            enableScreenProtection()
             // Reset warning click count when view appears
             warningClickCount = 0
-        }
-        .onDisappear {
-            disableScreenProtection()
         }
 
     }
@@ -217,45 +213,6 @@ struct PhotoViewerView: View {
             sendImageViewNotification()
         } else {
             AppLogger.log(tag: "LOG-APP: PhotoViewerView", message: "handleOpenImageTap() need \(2 - warningClickCount) more clicks")
-        }
-    }
-    
-
-    
-    private func enableScreenProtection() {
-        // Prevent screenshots and screen recording (Android FLAG_SECURE equivalent)
-        AppLogger.log(tag: "LOG-APP: PhotoViewerView", message: "enableScreenProtection() enabling screen protection")
-        
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let window = windowScene.windows.first {
-            // Add a protection overlay to prevent screenshots
-            let protectionView = UIView()
-            protectionView.backgroundColor = UIColor.clear
-            protectionView.isUserInteractionEnabled = false // CRITICAL: Don't block touch events
-            protectionView.tag = 9999 // Unique tag for identification
-            window.addSubview(protectionView)
-            protectionView.translatesAutoresizingMaskIntoConstraints = false
-            NSLayoutConstraint.activate([
-                protectionView.topAnchor.constraint(equalTo: window.topAnchor),
-                protectionView.leadingAnchor.constraint(equalTo: window.leadingAnchor),
-                protectionView.trailingAnchor.constraint(equalTo: window.trailingAnchor),
-                protectionView.bottomAnchor.constraint(equalTo: window.bottomAnchor)
-            ])
-        }
-    }
-    
-    private func disableScreenProtection() {
-        // Remove screen protection (Android FLAG_SECURE equivalent)
-        AppLogger.log(tag: "LOG-APP: PhotoViewerView", message: "disableScreenProtection() disabling screen protection")
-        
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let window = windowScene.windows.first {
-            // Remove the protection overlay
-            window.subviews.forEach { view in
-                if view.tag == 9999 {
-                    view.removeFromSuperview()
-                }
-            }
         }
     }
     

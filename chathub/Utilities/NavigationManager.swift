@@ -335,24 +335,7 @@ class NavigationManager: ObservableObject {
     }
 
     
-    func showFixAppPopup(onFix: (() -> Void)? = nil) {
-        AppLogger.log(tag: "LOG-APP: NavigationManager", message: "showFixAppPopup() showing fix app popup")
-        
-        if let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
-           let window = windowScene.windows.first,
-           let rootVC = window.rootViewController {
-            
-            let popupView = UIHostingController(rootView: FixAppPopUpView(onFix: onFix))
-            popupView.modalPresentationStyle = .overFullScreen
-            popupView.modalTransitionStyle = .crossDissolve
-            
-            if let presentedVC = rootVC.presentedViewController {
-                presentedVC.present(popupView, animated: true)
-            } else {
-                rootVC.present(popupView, animated: true)
-            }
-        }
-    }
+
     
     // MARK: - App Flow Navigation
     

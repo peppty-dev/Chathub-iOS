@@ -124,14 +124,14 @@ class AppSettingsWorker {
         // ==========================================
         // AI Chat Configuration Settings (Gender-specific)
         // ==========================================
-        if sessionManager.keyUserGender?.lowercased() == "male" {
-            if let aiChatEnabled = data["isAiChatEnabled"] as? Bool {
-                sessionManager.aiChatEnabled = aiChatEnabled
-            }
-        } else {
-            if let aiChatEnabledFemale = data["isAiChatEnabledFemale"] as? Bool {
-                sessionManager.aiChatEnabled = aiChatEnabledFemale
-            }
+        if let aiChatEnabledMale = data["isAiChatEnabled"] as? Bool {
+            sessionManager.aiChatEnabled = aiChatEnabledMale
+            AppLogger.log(tag: "LOG-APP: AppSettingsService", message: "parseAppSettingsData() aiChatEnabled (male) set to: \(aiChatEnabledMale)")
+        }
+        
+        if let aiChatEnabledFemale = data["isAiChatEnabledFemale"] as? Bool {
+            sessionManager.aiChatEnabledWoman = aiChatEnabledFemale
+            AppLogger.log(tag: "LOG-APP: AppSettingsService", message: "parseAppSettingsData() aiChatEnabledWoman (female) set to: \(aiChatEnabledFemale)")
         }
         
         if let maxIdleSecondsForAiChatEnabling = data["aiChatEnableMaxIdleSeconds"] as? Int64 {
@@ -144,6 +144,17 @@ class AppSettingsWorker {
         
         if let aiChatBotURL = data["aiChatbotUrl"] as? String {
             sessionManager.aiChatBotURL = aiChatBotURL
+        }
+        // Optionally store AI API key if provided via settings (reuses existing storage)
+        // Prefer the new standard key name: aiChatbotKey
+        let appSettingsApiKey =
+            (data["aiChatbotKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? (data["aiChatbotApiKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? (data["ai_chatbot_api_key"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? (data["hugging_face_api_key"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let apiKey = appSettingsApiKey, !apiKey.isEmpty {
+            sessionManager.aiApiKey = apiKey
+            AppLogger.log(tag: "LOG-APP: AppSettingsWorker", message: "updateSessionManager() Stored AI API key from AppSettings")
         }
         
         // ==========================================

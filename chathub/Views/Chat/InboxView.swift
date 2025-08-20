@@ -398,6 +398,14 @@ struct InboxView: View {
                     AppLogger.log(tag: "LOG-APP: InboxView", message: "deleteMessage() DeleteChatService completed successfully")
                     // Remove from local array
                     self.inboxMessages.removeAll { $0.id == message.id }
+                    // Also remove from AI chat IDs if present
+                    var ids = SessionManager.shared.aiChatIds
+                    let trimmed = chatId.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if let index = ids.firstIndex(of: trimmed) {
+                        ids.remove(at: index)
+                        SessionManager.shared.aiChatIds = ids
+                        AppLogger.log(tag: "LOG-APP: InboxView", message: "deleteMessage() removed chatId from aiChatIds: \(trimmed)")
+                    }
                 } else {
                     AppLogger.log(tag: "LOG-APP: InboxView", message: "deleteMessage() DeleteChatService failed")
                     // Could show error message to user if needed
