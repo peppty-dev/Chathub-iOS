@@ -3,6 +3,11 @@ import FirebaseFirestore
 import FirebaseAuth
 import UIKit
 
+// MARK: - Notification Names
+extension Notification.Name {
+    static let conversationDeleted = Notification.Name("conversationDeleted")
+}
+
 /// iOS equivalent of Android ChatsWorker
 /// Handles chats synchronization from Firebase to local database with 100% Android parity
 class ChatsSyncService {
@@ -452,7 +457,9 @@ class ChatsSyncService {
         
         AppLogger.log(tag: "LOG-APP: ChatsSyncService", message: "deleteChatFromLocalDatabase() Chat deletion completed: \(chatId)")
         
+        // Notify MessagesView if it's currently open for this chat
         DispatchQueue.main.async {
+            NotificationCenter.default.post(name: .conversationDeleted, object: nil, userInfo: ["chatId": chatId])
             completion()
         }
     }

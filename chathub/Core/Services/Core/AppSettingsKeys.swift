@@ -33,6 +33,18 @@ struct AppSettingsKeys {
     static let freeConversationsLimit = "freeConversationsLimit"
     static let freeConversationsCooldownSeconds = "freeConversationsCooldownSeconds"
 
+    // Free User Refresh Limit Settings
+    static let freeRefreshLimit = "freeRefreshLimit"
+    static let freeRefreshCooldownSeconds = "freeRefreshCooldownSeconds"
+
+    // Free User Filter Limit Settings
+    static let freeFilterLimit = "freeFilterLimit"
+    static let freeFilterCooldownSeconds = "freeFilterCooldownSeconds"
+
+    // Free User Search Limit Settings
+    static let freeSearchLimit = "freeSearchLimit"
+    static let freeSearchCooldownSeconds = "freeSearchCooldownSeconds"
+
     // User Gender Key (ensure this matches the key used elsewhere for storing user gender)
     static let userGender = "userGender" // From search, "userGender" is used
 
@@ -60,6 +72,7 @@ struct AppSettingsKeys {
     // Keys for 'Text Moderation' warning logic
     static let hiveTextModerationScore = "hiveTextModerationScore"
     static let textModerationIssueShowWarningCooldownUntilTimestamp = "textModerationIssueShowWarningCooldownUntilTimestamp"
+    static let textModerationShadowBanLockDurationSeconds = "textModerationShadowBanLockDurationSeconds"
 
     // Keys for 'Image Moderation' warning logic
     static let hiveImageModerationScore = "hiveImageModerationScore"
@@ -79,7 +92,27 @@ struct AppSettingsKeys {
 
     // New key for Android parity
     static let isAiChatEnabled = "isAiChatEnabled"
+    static let isAiChatEnabledFemale = "isAiChatEnabledFemale"
     static let maxIdleSecondsForAiChatEnabling = "aiChatEnableMaxIdleSeconds" // normalized
     static let minOfflineSecondsForAiChatEnabling = "aiChatEnableMinOfflineSeconds" // normalized
     static let aiChatBotURL = "aiChatbotUrl" // normalized
+    
+    // UI Toggle: Show "X left" labels in limit popups
+    static let showRemainingChancesLabel = "showRemainingChancesLabel"
+
+    // AI Model Provider Selection
+    // Persisted in Firebase AppSettings and mirrored in SessionManager
+    // Values: "falcon", "openrouter", or "venice"
+    static let aiModelProvider = "aiModelProvider"
+    // For OpenRouter we also support specifying the exact model slug
+    // Example: "cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
+    static let aiSelectedModel = "aiSelectedModel"
+
+    // Provider-specific credential keys
+    static let falconApiUrl = "falconApiUrl"
+    static let falconApiKey = "falconApiKey"
+    static let openRouterApiUrl = "openRouterApiUrl"
+    static let openRouterApiKey = "openRouterApiKey"
+    static let veniceApiUrl = "veniceApiUrl"
+    static let veniceApiKey = "veniceApiKey"
 } 

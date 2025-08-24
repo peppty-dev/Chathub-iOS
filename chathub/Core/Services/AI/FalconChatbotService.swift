@@ -16,6 +16,8 @@ class FalconChatbotService {
     
     // Android Parity: Main sendMessage method matching Android signature exactly
     func sendMessage(apiURL: String, apiKey: String, prompt: String, callback: FalconChatbotCallback) {
+        // Dedicated single-line prompt log for easy copy/paste during testing
+        AppLogger.log(tag: "LOG-APP: FalconPrompt", message: prompt)
         AppLogger.log(tag: "LOG-APP: FalconChatbotService", message: "sendMessage() prompt: \(prompt) \nAPI_URL = \(apiURL)")
         
         // Android Parity: Null checks

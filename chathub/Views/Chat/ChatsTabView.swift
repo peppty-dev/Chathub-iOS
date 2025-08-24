@@ -220,8 +220,8 @@ struct ChatsTabView: View {
                     .foregroundColor(Color("dark"))
                     .animation(.easeInOut(duration: 0.12), value: selectedFilter)
                 
-                // Badge for regular chats count - Hidden as requested (count shown in main tab badge)
-                if false && viewModel.chatList.filter({ $0.newmessage }).count > 0 {
+                // Badge for regular chats count
+                if viewModel.chatList.filter({ $0.newmessage }).count > 0 {
                     chatsBadge
                 }
             }

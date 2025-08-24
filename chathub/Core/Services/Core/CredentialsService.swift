@@ -18,52 +18,67 @@ class CredentialsService {
     func loadCredentials() {
         AppLogger.log(tag: "LOG-APP: CredentialsService", message: "loadCredentials() Loading credentials from JSON")
         
-        // Always load AI API URL from SessionManager first (Android parity)
-        aiApiUrl = SessionManager.shared.getAiChatBotURL() ?? ""
-        AppLogger.log(tag: "LOG-APP: CredentialsService", message: "loadCredentials() Session aiApiUrl = \(aiApiUrl)")
-        
-        // Try to read a bundled credentials.json if present
-        guard let path = Bundle.main.path(forResource: "credentials", ofType: "json"),
-              let data = NSData(contentsOfFile: path) else {
-            AppLogger.log(tag: "LOG-APP: CredentialsService", message: "loadCredentials() credentials.json file not found - using SessionManager value for aiApiUrl")
-            return
+        // Determine active provider and pull from SessionManager per-provider keys only
+        let provider = SessionManager.shared.aiModelProvider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if provider == "openrouter" {
+            aiApiUrl = SessionManager.shared.openRouterApiUrl
+            aiApiKey = SessionManager.shared.openRouterApiKey
+        } else if provider == "venice" {
+            aiApiUrl = SessionManager.shared.veniceApiUrl.isEmpty ? "https://api.venice.ai/api/v1" : SessionManager.shared.veniceApiUrl
+            aiApiKey = SessionManager.shared.veniceApiKey
+        } else {
+            aiApiUrl = SessionManager.shared.falconApiUrl
+            aiApiKey = SessionManager.shared.falconApiKey
         }
         
-        do {
-            guard let json = try JSONSerialization.jsonObject(with: data as Data) as? [String: Any] else {
-                AppLogger.log(tag: "LOG-APP: CredentialsService", message: "loadCredentials() Failed to parse JSON")
-                return
+        // Optionally allow JSON overrides to set per-provider values (development convenience)
+        if let path = Bundle.main.path(forResource: "credentials", ofType: "json"),
+           let data = NSData(contentsOfFile: path) {
+            do {
+                if let json = try JSONSerialization.jsonObject(with: data as Data) as? [String: Any] {
+                    if let falconUrl = json[AppSettingsKeys.falconApiUrl] as? String, !falconUrl.isEmpty {
+                        SessionManager.shared.falconApiUrl = falconUrl
+                    }
+                    if let falconKey = json[AppSettingsKeys.falconApiKey] as? String, !falconKey.isEmpty {
+                        SessionManager.shared.falconApiKey = falconKey
+                    }
+                    if let orUrl = json[AppSettingsKeys.openRouterApiUrl] as? String, !orUrl.isEmpty {
+                        SessionManager.shared.openRouterApiUrl = orUrl
+                    }
+                    if let orKey = (
+                        json[AppSettingsKeys.openRouterApiKey] as? String ??
+                        json["openrouter_api_key"] as? String ??
+                        json["OPENROUTER_API_KEY"] as? String
+                    ), !orKey.isEmpty {
+                        SessionManager.shared.openRouterApiKey = orKey
+                    }
+                    if let veniceUrl = json["veniceApiUrl"] as? String, !veniceUrl.isEmpty {
+                        SessionManager.shared.veniceApiUrl = veniceUrl
+                    }
+                    if let veniceKey = (
+                        json["veniceApiKey"] as? String ??
+                        json["VENICE_API_KEY"] as? String
+                    ), !veniceKey.isEmpty {
+                        SessionManager.shared.veniceApiKey = veniceKey
+                    }
+                    // Refresh local vars after potential overrides
+                    if provider == "openrouter" {
+                        aiApiUrl = SessionManager.shared.openRouterApiUrl
+                        aiApiKey = SessionManager.shared.openRouterApiKey
+                    } else if provider == "venice" {
+                        aiApiUrl = SessionManager.shared.veniceApiUrl
+                        aiApiKey = SessionManager.shared.veniceApiKey
+                    } else {
+                        aiApiUrl = SessionManager.shared.falconApiUrl
+                        aiApiKey = SessionManager.shared.falconApiKey
+                    }
+                }
+            } catch {
+                AppLogger.log(tag: "LOG-APP: CredentialsService", message: "loadCredentials() JSON parsing error: \(error.localizedDescription)")
             }
-            
-            // Android Parity: Load AI API credentials
-            // Prefer SessionManager, but allow JSON to provide/override if present
-            let jsonApiUrl = (json["ai_api_url"] as? String)
-                ?? (json["AI_API_URL"] as? String)
-                ?? (json["aiChatbotUrl"] as? String)
-            if let url = jsonApiUrl, !url.isEmpty { aiApiUrl = url }
-            // API Key: prefer existing, then JSON, then SessionManager
-            if let jsonKey = (
-                json["aiChatbotKey"] as? String ??
-                json["aiChatbotApiKey"] as? String ??
-                json["ai_chatbot_api_key"] as? String ??
-                json["hugging_face_api_key"] as? String
-            ), !jsonKey.isEmpty {
-                aiApiKey = jsonKey
-            }
-            if aiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                aiApiKey = SessionManager.shared.aiApiKey ?? aiApiKey
-            }
-            
-            // Android Parity: Load AWS credentials
-            awsCognitoIdentityPoolId = json["aws_cognito_identity_pool_id_for_chatbot"] as? String ?? ""
-            awsChatbotEndpointUrl = json["aws_chatbot_endpoint_url"] as? String ?? ""
-            
-            AppLogger.log(tag: "LOG-APP: CredentialsService", message: "loadCredentials() Credentials loaded successfully")
-            AppLogger.log(tag: "LOG-APP: CredentialsService", message: "loadCredentials() AI_API_URL = \(aiApiUrl)")
-            
-        } catch {
-            AppLogger.log(tag: "LOG-APP: CredentialsService", message: "loadCredentials() JSON parsing error: \(error.localizedDescription)")
         }
+        
+        AppLogger.log(tag: "LOG-APP: CredentialsService", message: "loadCredentials() AI_API_URL = \(aiApiUrl)")
     }
     
     // Android Parity: Getter methods matching Android pattern
@@ -72,10 +87,6 @@ class CredentialsService {
     }
     
     func getAiApiKey() -> String {
-        if aiApiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            // Runtime fallback to SessionManager if needed
-            return SessionManager.shared.aiApiKey ?? ""
-        }
         return aiApiKey
     }
     

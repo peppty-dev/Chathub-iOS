@@ -142,19 +142,46 @@ class AppSettingsWorker {
             sessionManager.minOfflineSecondsForAiChatEnabling = minOfflineSecondsForAiChatEnabling
         }
         
-        if let aiChatBotURL = data["aiChatbotUrl"] as? String {
-            sessionManager.aiChatBotURL = aiChatBotURL
+        // Provider-specific URLs/Keys (optional)
+        if let falconUrl = data[AppSettingsKeys.falconApiUrl] as? String { sessionManager.falconApiUrl = falconUrl }
+        if let falconKey = data[AppSettingsKeys.falconApiKey] as? String { sessionManager.falconApiKey = falconKey }
+        if let orUrl = data[AppSettingsKeys.openRouterApiUrl] as? String { sessionManager.openRouterApiUrl = orUrl }
+        if let orKey = data[AppSettingsKeys.openRouterApiKey] as? String { sessionManager.openRouterApiKey = orKey }
+        if let venUrl = data[AppSettingsKeys.veniceApiUrl] as? String { sessionManager.veniceApiUrl = venUrl }
+        if let venKey = data[AppSettingsKeys.veniceApiKey] as? String { sessionManager.veniceApiKey = venKey }
+        
+        // AI Model Provider selection
+        if let provider = data[AppSettingsKeys.aiModelProvider] as? String {
+            sessionManager.aiModelProvider = provider
+            AppLogger.log(tag: "LOG-APP: AppSettingsWorker", message: "updateSessionManager() aiModelProvider set to: \(provider)")
         }
-        // Optionally store AI API key if provided via settings (reuses existing storage)
-        // Prefer the new standard key name: aiChatbotKey
-        let appSettingsApiKey =
-            (data["aiChatbotKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            ?? (data["aiChatbotApiKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            ?? (data["ai_chatbot_api_key"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-            ?? (data["hugging_face_api_key"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
-        if let apiKey = appSettingsApiKey, !apiKey.isEmpty {
-            sessionManager.aiApiKey = apiKey
-            AppLogger.log(tag: "LOG-APP: AppSettingsWorker", message: "updateSessionManager() Stored AI API key from AppSettings")
+        if let selectedModel = data[AppSettingsKeys.aiSelectedModel] as? String {
+            sessionManager.aiSelectedModel = selectedModel
+            AppLogger.log(tag: "LOG-APP: AppSettingsWorker", message: "updateSessionManager() aiSelectedModel set to: \(selectedModel)")
+        }
+
+        // Based on aiModelProvider, select active URL/key for runtime
+        let provider = sessionManager.aiModelProvider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        func maskKey(_ key: String) -> String {
+            let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
+            let count = trimmed.count
+            guard count > 8 else { return String(repeating: "*", count: max(0, count)) }
+            let start = trimmed.prefix(4)
+            let end = trimmed.suffix(4)
+            return "\(start)***\(end) (len=\(count))"
+        }
+        if provider == "openrouter" {
+            if !sessionManager.openRouterApiUrl.isEmpty { sessionManager.aiChatBotURL = sessionManager.openRouterApiUrl }
+            if !sessionManager.openRouterApiKey.isEmpty { sessionManager.aiApiKey = sessionManager.openRouterApiKey }
+            AppLogger.log(tag: "LOG-APP: AppSettingsWorker", message: "provider=openrouter url=\(sessionManager.aiChatBotURL ?? "") key=\(maskKey(sessionManager.aiApiKey ?? ""))")
+        } else if provider == "venice" {
+            if !sessionManager.veniceApiUrl.isEmpty { sessionManager.aiChatBotURL = sessionManager.veniceApiUrl }
+            if !sessionManager.veniceApiKey.isEmpty { sessionManager.aiApiKey = sessionManager.veniceApiKey }
+            AppLogger.log(tag: "LOG-APP: AppSettingsWorker", message: "provider=venice url=\(sessionManager.aiChatBotURL ?? "") key=\(maskKey(sessionManager.aiApiKey ?? ""))")
+        } else {
+            if !sessionManager.falconApiUrl.isEmpty { sessionManager.aiChatBotURL = sessionManager.falconApiUrl }
+            if !sessionManager.falconApiKey.isEmpty { sessionManager.aiApiKey = sessionManager.falconApiKey }
+            AppLogger.log(tag: "LOG-APP: AppSettingsWorker", message: "provider=falcon url=\(sessionManager.aiChatBotURL ?? "") key=\(maskKey(sessionManager.aiApiKey ?? ""))")
         }
         
         // ==========================================
@@ -231,6 +258,13 @@ class AppSettingsWorker {
         
         if let freeSearchCooldownSeconds = data["freeSearchCooldownSeconds"] as? Int64 {
             sessionManager.freeSearchCooldownSeconds = Int(freeSearchCooldownSeconds)
+        }
+        
+        // ==========================================
+        // UI Toggles
+        // ==========================================
+        if let showRemaining = data[AppSettingsKeys.showRemainingChancesLabel] as? Bool {
+            sessionManager.showRemainingChancesLabel = showRemaining
         }
         
         // Ensure changes are saved immediately (Android parity)

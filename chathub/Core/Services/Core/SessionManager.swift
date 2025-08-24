@@ -76,6 +76,7 @@ class SessionManager: ObservableObject {
         
         // Messaging Keys
         static let lastUserMessagePrefix = "lastUserMessage_"
+        static let draftMessagePrefix = "draftMessage_"
         
         // Reporting Keys
         static let reportedImages = "reportedImages"
@@ -129,6 +130,19 @@ class SessionManager: ObservableObject {
         static let lastFeatureMonetizationPopupTime = "LAST_FEATURE_MONETIZATION_POP_UP_COOL_DOWN_SECONDS"
         static let featureMonetizationPopupCooldown = "feature_monetization_popup_cooldown_seconds"
         static let firstAccountCreatedTime = "device_first_account_time"
+
+        // AI Provider selection keys
+        static let aiModelProvider = "aiModelProvider"
+        static let aiSelectedModel = "aiSelectedModel"
+        static let falconApiUrl = "falconApiUrl"
+        static let falconApiKey = "falconApiKey"
+        static let openRouterApiUrl = "openRouterApiUrl"
+        static let openRouterApiKey = "openRouterApiKey"
+        static let veniceApiUrl = "veniceApiUrl"
+        static let veniceApiKey = "veniceApiKey"
+        
+        // UI Toggle Keys
+        static let showRemainingChancesLabel = "SHOW_REMAINING_CHANCES_LABEL"
         
         // Missing Keys for Complete Migration
         static let userOnline = "UserOnline"
@@ -513,6 +527,51 @@ class SessionManager: ObservableObject {
             return defaults.bool(forKey: Keys.hapticEnabled)
         }
         set { defaults.set(newValue, forKey: Keys.hapticEnabled) }
+    }
+    
+    // AI model provider selection persisted locally from AppSettings
+    // Values: "falcon", "openrouter", or "venice"
+    var aiModelProvider: String {
+        get { defaults.string(forKey: Keys.aiModelProvider) ?? "falcon" }
+        set { defaults.set(newValue, forKey: Keys.aiModelProvider) }
+    }
+    
+    // Selected model slug when using OpenRouter (or empty for defaults)
+    var aiSelectedModel: String {
+        get { defaults.string(forKey: Keys.aiSelectedModel) ?? "" }
+        set { defaults.set(newValue, forKey: Keys.aiSelectedModel) }
+    }
+
+    // Provider-specific persisted values (optional; worker sets these)
+    var falconApiUrl: String {
+        get { defaults.string(forKey: Keys.falconApiUrl) ?? "" }
+        set { defaults.set(newValue, forKey: Keys.falconApiUrl) }
+    }
+    var falconApiKey: String {
+        get { defaults.string(forKey: Keys.falconApiKey) ?? "" }
+        set { defaults.set(newValue, forKey: Keys.falconApiKey) }
+    }
+    var openRouterApiUrl: String {
+        get { defaults.string(forKey: Keys.openRouterApiUrl) ?? "" }
+        set { defaults.set(newValue, forKey: Keys.openRouterApiUrl) }
+    }
+    var openRouterApiKey: String {
+        get { defaults.string(forKey: Keys.openRouterApiKey) ?? "" }
+        set { defaults.set(newValue, forKey: Keys.openRouterApiKey) }
+    }
+    var veniceApiUrl: String {
+        get { defaults.string(forKey: Keys.veniceApiUrl) ?? "" }
+        set { defaults.set(newValue, forKey: Keys.veniceApiUrl) }
+    }
+    var veniceApiKey: String {
+        get { defaults.string(forKey: Keys.veniceApiKey) ?? "" }
+        set { defaults.set(newValue, forKey: Keys.veniceApiKey) }
+    }
+    
+    // Toggle showing "X left" badges in limit popups
+    var showRemainingChancesLabel: Bool {
+        get { defaults.bool(forKey: Keys.showRemainingChancesLabel, default: true) }
+        set { defaults.set(newValue, forKey: Keys.showRemainingChancesLabel) }
     }
     
     // MARK: - Filter Properties
@@ -1709,6 +1768,19 @@ class SessionManager: ObservableObject {
     
     func removeLastUserMessage(for chatId: String) {
         defaults.removeObject(forKey: Keys.lastUserMessagePrefix + chatId)
+    }
+    
+    /// Draft message helpers (per chat)
+    func getDraftMessage(for chatId: String) -> String? {
+        return defaults.string(forKey: Keys.draftMessagePrefix + chatId)
+    }
+    
+    func setDraftMessage(_ message: String, for chatId: String) {
+        defaults.set(message, forKey: Keys.draftMessagePrefix + chatId)
+    }
+    
+    func removeDraftMessage(for chatId: String) {
+        defaults.removeObject(forKey: Keys.draftMessagePrefix + chatId)
     }
     
     // MARK: - Session Management Methods

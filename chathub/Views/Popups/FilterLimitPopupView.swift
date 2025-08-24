@@ -158,28 +158,30 @@ struct FilterLimitPopupView: View {
                                         .padding(.trailing, 8)
                                 } else {
                                     // Show remaining filters when not in cooldown or when timer expired
-                                    // This handles both cases: !isLimitReached and (isLimitReached && remainingTime <= 0)
-                                    let remaining = max(0, limit - currentUsage)
-                                    
-                                    if remaining > 0 || remainingTime <= 0 {
-                                        Text("\(remaining > 0 ? remaining : limit) left")
-                                            .font(.system(size: 12, weight: .medium))
-                                            .foregroundColor(.white)
-                                            .padding(.horizontal, 8)
-                                            .padding(.vertical, 4)
-                                            .background(
-                                                RoundedRectangle(cornerRadius: 10)
-                                                    .fill(Color.white.opacity(0.25))
-                                            )
-                                            .padding(.trailing, 8)
-                                    } else {
-                                        // Invisible text to maintain button height consistency (rare edge case)
-                                        Text("00:00")
-                                            .font(.system(size: 12, weight: .bold))
-                                            .opacity(0)
-                                            .padding(.horizontal, 8)
-                                            .padding(.vertical, 4)
-                                            .padding(.trailing, 8)
+                                    if SessionManager.shared.showRemainingChancesLabel {
+                                        // This handles both cases: !isLimitReached and (isLimitReached && remainingTime <= 0)
+                                        let remaining = max(0, limit - currentUsage)
+                                        
+                                        if remaining > 0 || remainingTime <= 0 {
+                                            Text("\(remaining > 0 ? remaining : limit) left")
+                                                .font(.system(size: 12, weight: .medium))
+                                                .foregroundColor(.white)
+                                                .padding(.horizontal, 8)
+                                                .padding(.vertical, 4)
+                                                .background(
+                                                    RoundedRectangle(cornerRadius: 10)
+                                                        .fill(Color.white.opacity(0.25))
+                                                )
+                                                .padding(.trailing, 8)
+                                        } else {
+                                            // Invisible text to maintain button height consistency (rare edge case)
+                                            Text("00:00")
+                                                .font(.system(size: 12, weight: .bold))
+                                                .opacity(0)
+                                                .padding(.horizontal, 8)
+                                                .padding(.vertical, 4)
+                                                .padding(.trailing, 8)
+                                        }
                                     }
                                 }
                             }
@@ -423,11 +425,16 @@ struct FilterLimitPopupView: View {
     }
     
     private func getDescriptionText() -> String {
+        let showRemaining = SessionManager.shared.showRemainingChancesLabel
         if isLimitReached && remainingTime > 0 {
-            // During cooldown - show specific limit reached message
-            return "You've used your \(limit) free filter applications. Subscribe to ChatHub Lite for unlimited access or wait for the timer to reset."
+            // During cooldown - show limit reached message
+            if showRemaining {
+                return "You've used your \(limit) free filter applications. Subscribe to ChatHub Lite for unlimited access or wait for the timer to reset."
+            } else {
+                return "You've reached your free filter limit. Subscribe to ChatHub Lite for unlimited access or wait for the timer to reset."
+            }
         } else {
-            // Normal state - show general description
+            // Normal state - always show generic description (no counts)
             return "Apply advanced filters to find your perfect match. Upgrade to ChatHub Lite subscription to unlock unlimited filter applications."
         }
     }

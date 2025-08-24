@@ -79,9 +79,22 @@ struct ConversationLimitPopupView: View {
                         // SB description (title unchanged). Encourage Plus to chat instantly.
                         Text("You promoted other apps. You can start new conversations after the timer ends. Subscribe to Plus to chat instantly.")
                     } else if isLimitReached && remainingTime > 0 {
-                        Text("You've used your \(limit) free conversations. Subscribe to ChatHub Plus for unlimited conversations and discover more people!")
+                        if SessionManager.shared.showRemainingChancesLabel {
+                            Text("You've used your \(limit) free conversations. Subscribe to ChatHub Plus for unlimited conversations and discover more people!")
+                        } else {
+                            Text("You've reached your free conversation limit. Subscribe to ChatHub Plus for unlimited conversations and discover more people!")
+                        }
                     } else {
-                        Text("Start new conversations to meet interesting people! Subscribe to ChatHub Plus for unlimited conversations.")
+                        if SessionManager.shared.showRemainingChancesLabel {
+                            let remaining = max(0, limit - currentUsage)
+                            if remaining > 0 {
+                                Text("You have \(remaining) conversations remaining. Subscribe to ChatHub Plus for unlimited conversations.")
+                            } else {
+                                Text("Start new conversations to meet interesting people! Subscribe to ChatHub Plus for unlimited conversations.")
+                            }
+                        } else {
+                            Text("Start new conversations to meet interesting people! Subscribe to ChatHub Plus for unlimited conversations.")
+                        }
                     }
                 }
                 .font(.system(size: 14))
@@ -145,27 +158,29 @@ struct ConversationLimitPopupView: View {
                                 Spacer()
                                 
                                 // Right side - show remaining conversations
-                                let remaining = max(0, limit - currentUsage)
-                                
-                                if remaining > 0 || remainingTime <= 0 {
-                                    Text("\(remaining > 0 ? remaining : limit) left")
-                                        .font(.system(size: 12, weight: .medium))
-                                        .foregroundColor(.white)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 4)
-                                        .background(
-                                            RoundedRectangle(cornerRadius: 10)
-                                                .fill(Color.white.opacity(0.25))
-                                        )
-                                        .padding(.trailing, 8)
-                                } else {
-                                    // Invisible text to maintain button height consistency
-                                    Text("00:00")
-                                        .font(.system(size: 12, weight: .bold))
-                                        .opacity(0)
-                                        .padding(.horizontal, 8)
-                                        .padding(.vertical, 4)
-                                        .padding(.trailing, 8)
+                                if SessionManager.shared.showRemainingChancesLabel {
+                                    let remaining = max(0, limit - currentUsage)
+                                    
+                                    if remaining > 0 || remainingTime <= 0 {
+                                        Text("\(remaining > 0 ? remaining : limit) left")
+                                            .font(.system(size: 12, weight: .medium))
+                                            .foregroundColor(.white)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .background(
+                                                RoundedRectangle(cornerRadius: 10)
+                                                    .fill(Color.white.opacity(0.25))
+                                            )
+                                            .padding(.trailing, 8)
+                                    } else {
+                                        // Invisible text to maintain button height consistency
+                                        Text("00:00")
+                                            .font(.system(size: 12, weight: .bold))
+                                            .opacity(0)
+                                            .padding(.horizontal, 8)
+                                            .padding(.vertical, 4)
+                                            .padding(.trailing, 8)
+                                    }
                                 }
                             }
                             .foregroundColor(.white)

@@ -79,6 +79,13 @@ struct MessagesView: View {
     private let maxPillsPerSession: Int = 15
     @State private var interestRejectionCounts: [String: Int] = [:]
     private let maxInterestRejections: Int = 2
+    
+    // Draft persistence debounce
+    @State private var draftSaveWork: DispatchWorkItem? = nil
+    private let draftSaveDelay: TimeInterval = 0.4
+    
+    // Conversation deletion notification observer
+    @State private var conversationDeletedObserver: NSObjectProtocol? = nil
 
     
     // MARK: - Call Implementation (Android Parity)
@@ -618,6 +625,18 @@ struct MessagesView: View {
                         .onChange(of: messageText) { _, newText in
                             updateTextHeight(for: newText)
                             handleTypingDebounced()
+                            // Persist draft per chatId with debounce
+                            draftSaveWork?.cancel()
+                            let work = DispatchWorkItem {
+                                let trimmed = newText.trimmingCharacters(in: .whitespacesAndNewlines)
+                                if trimmed.isEmpty {
+                                    SessionManager.shared.removeDraftMessage(for: chatId)
+                                } else {
+                                    SessionManager.shared.setDraftMessage(newText, for: chatId)
+                                }
+                            }
+                            draftSaveWork = work
+                            DispatchQueue.main.asyncAfter(deadline: .now() + draftSaveDelay, execute: work)
                         }
                         .onChange(of: isTextEditorFocused) { _, focused in
                             // Stop typing when losing focus
@@ -1021,6 +1040,12 @@ struct MessagesView: View {
         // Initialize text input height to calculated single line height (Progressive Growth Pattern)
         textHeight = calculateTextHeight(for: "")
         
+        // Load draft for this chat if present
+        if let savedDraft = SessionManager.shared.getDraftMessage(for: chatId), !savedDraft.isEmpty {
+            messageText = savedDraft
+            updateTextHeight(for: savedDraft)
+        }
+        
         // ANDROID PARITY: Ensure status is visible immediately like live button
         if currentUserStatus.isEmpty || currentUserStatus == "Connecting..." || currentUserStatus == "    " {
             setInitialStatus()
@@ -1044,6 +1069,9 @@ struct MessagesView: View {
 
         // Start unified info gathering system with integrated interest suggestions
         startInfoGatheringSystem()
+        
+        // Listen for conversation deletion notifications
+        setupConversationDeletionListener()
 
         // Update "here" status so other devices can detect we're in this chat (Android parity)
         updateHereStatus(isActive: true)
@@ -1253,10 +1281,46 @@ struct MessagesView: View {
             AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() Skipping onDismiss - hasFullyAppeared: \(hasFullyAppeared), onDismiss: \(onDismiss != nil)")
         }
         
+        // Clean up conversation deletion listener
+        cleanupConversationDeletionListener()
+        
         // ANDROID PARITY: Check and show rating dialog when returning from message activity
         // This matches Android MainActivity.onActivityResult() for MESSAGE_TEXT_ACTIVITY_REQUEST_CODE
         AppLogger.log(tag: "LOG-APP: MessagesView", message: "onDisappear() Checking rating conditions after message activity")
         RatingService.shared.checkAndShowRatingDialogIfNeeded()
+    }
+    
+    // MARK: - Conversation Deletion Handling
+    
+    private func setupConversationDeletionListener() {
+        let currentChatId = self.chatId
+        let presentationMode = self.presentationMode
+        
+        conversationDeletedObserver = NotificationCenter.default.addObserver(
+            forName: .conversationDeleted,
+            object: nil,
+            queue: .main
+        ) { notification in
+            guard let userInfo = notification.userInfo,
+                  let deletedChatId = userInfo["chatId"] as? String else { return }
+            
+            // Check if this is the current conversation
+            if deletedChatId == currentChatId {
+                AppLogger.log(tag: "LOG-APP: MessagesView", message: "setupConversationDeletionListener() Current conversation deleted, dismissing view silently")
+                
+                // Dismiss the view silently without showing any message
+                DispatchQueue.main.async {
+                    presentationMode.wrappedValue.dismiss()
+                }
+            }
+        }
+    }
+    
+    private func cleanupConversationDeletionListener() {
+        if let observer = conversationDeletedObserver {
+            NotificationCenter.default.removeObserver(observer)
+            conversationDeletedObserver = nil
+        }
     }
     
     // MARK: - Call Button Handlers (Android Parity)
@@ -1491,6 +1555,18 @@ struct MessagesView: View {
         
         if isAIChat {
             startAIStatusSimulation()
+            // Prepare static AI prompt scaffold once per conversation
+            if let otherProfile = getOtherUserProfile(), let myProfile = getMyProfile() {
+                AIMessageService.shared.preparePromptScaffold(
+                    chatId: chatId,
+                    otherProfile: otherProfile,
+                    myProfile: myProfile,
+                    isProfanity: false,
+                    myInterestTags: SimplifiedInterestManager.shared.getCurrentInterests(),
+                    otherInterestTags: otherUserInterests,
+                    completion: nil
+                )
+            }
         }
         
         // Show interest status after 1 hour (Android parity)
@@ -1532,6 +1608,12 @@ struct MessagesView: View {
         if isInCall {
             agoraEngine?.leaveChannel(nil)
             AgoraRtcEngineKit.destroy()
+        }
+
+        // Save current draft immediately on cleanup if any
+        let trimmedDraft = messageText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedDraft.isEmpty {
+            SessionManager.shared.setDraftMessage(messageText, for: chatId)
         }
     }
     
@@ -2396,6 +2478,8 @@ struct MessagesView: View {
         stopTypingOnAction()
         
         messageText = ""
+        // Clear saved draft for this chat after successful send initiation
+        SessionManager.shared.removeDraftMessage(for: chatId)
         
         // Reset text height to single line after sending message (Progressive Growth Pattern)
         withAnimation(.easeInOut(duration: 0.2)) {
@@ -2834,15 +2918,20 @@ struct MessagesView: View {
             return
         }
         
-        // Android Parity: Load credentials like Android getCredentials()
-        CredentialsService.shared.loadCredentials()
-        var apiUrl = CredentialsService.shared.getAiApiUrl()
-        // Fallback to SessionManager if still empty
-        if apiUrl.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            apiUrl = SessionManager.shared.getAiChatBotURL() ?? ""
-            AppLogger.log(tag: "LOG-APP: MessagesView", message: "triggerAIMessage() Fallback used for AI API URL: \(apiUrl)")
+        // Provider-specific config from SessionManager (no CredentialsService)
+        let provider = SessionManager.shared.aiModelProvider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var apiUrl = ""
+        var apiKey = ""
+        if provider == "openrouter" {
+            apiUrl = SessionManager.shared.openRouterApiUrl
+            apiKey = SessionManager.shared.openRouterApiKey
+        } else if provider == "venice" {
+            apiUrl = SessionManager.shared.veniceApiUrl
+            apiKey = SessionManager.shared.veniceApiKey
+        } else {
+            apiUrl = SessionManager.shared.falconApiUrl
+            apiKey = SessionManager.shared.falconApiKey
         }
-        let apiKey = CredentialsService.shared.getAiApiKey()
         
         // Use new structured prompt flow
         AIMessageService.shared.generateAiMessage(
@@ -3646,8 +3735,10 @@ struct MessagesView: View {
     }
     
     private func getConversationHistory() -> String {
-        return messages.suffix(15).map { msg in
-            let sender = msg.isFromCurrentUser ? "Me" : otherUser.name
+        // Build chronological context (oldest -> newest) for the prompt
+        let currentUserName = SessionManager.shared.getUserName() ?? "User"
+        return messages.prefix(10).reversed().map { msg in
+            let sender = msg.isFromCurrentUser ? currentUserName : otherUser.name
             return "\(sender): \(msg.text)"
         }.joined(separator: "\n")
     }

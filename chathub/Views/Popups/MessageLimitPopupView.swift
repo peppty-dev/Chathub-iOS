@@ -330,11 +330,16 @@ struct MessageLimitPopupView: View {
     }
     
     private func getDescriptionText() -> String {
+        let showRemaining = SessionManager.shared.showRemainingChancesLabel
         if isLimitReached && remainingTime > 0 {
-            // During cooldown - show specific limit reached message
-            return "You've reached your limit of \(limit) free messages. Subscribe to ChatHub Pro for unlimited access or wait for the timer to reset."
+            // During cooldown - show limit reached message
+            if showRemaining {
+                return "You've reached your limit of \(limit) free messages. Subscribe to ChatHub Pro for unlimited access or wait for the timer to reset."
+            } else {
+                return "You've reached your free message limit. Subscribe to ChatHub Pro for unlimited access or wait for the timer to reset."
+            }
         } else {
-            // Normal state - show general description
+            // Normal state - always show generic description (no counts)
             return "Send unlimited messages to connect with people. Upgrade to ChatHub Pro subscription to unlock unlimited messaging."
         }
     }

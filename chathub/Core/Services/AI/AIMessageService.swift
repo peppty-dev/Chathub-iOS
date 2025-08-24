@@ -15,11 +15,106 @@ class AIMessageService {
     private let sessionManager = SessionManager.shared
     private let database = Firestore.firestore()
     private let falconChatbot = FalconChatbotService.shared
+    private let openRouterChatbot = OpenRouterChatbotService.shared
+    private let veniceChatbot = VeniceChatbotService.shared
     private let moodGenerator = MoodGenerator.shared
     // Deprecated: ChatConversationManager will be removed in favor of structured prompts
     // private let conversationManager = ChatConversationManager.shared
     private let structuredPromptBuilder = StructuredPromptBuilder()
     private let curatedExamplesProvider = CuratedExamplesProvider()
+
+    // MARK: - Prompt Scaffold Cache (per conversation)
+    private struct PromptScaffoldCacheEntry {
+        let openRouterHeader: String   // Static header up to (and including) EXAMPLE CONVERSATION section
+        let veniceHeader: String       // Static header up to (and including) EXAMPLE CONVERSATION section
+        let toneMessages: String       // Cached tone messages block
+        let modelMessages: String      // Cached model messages/examples block
+    }
+    private var promptScaffoldCache: [String: PromptScaffoldCacheEntry] = [:]
+
+    // Adapter to reuse existing OpenRouter response handling pipeline shape
+    class VeniceCallbackProxy: VeniceChatbotService.VeniceCallback {
+        weak var aiServiceRef: AIMessageService?
+        let prompt: String
+        let chatId: String
+        let otherProfile: UserCoreDataReplacement
+        let lastAiMessage: String?
+        let isProfanity: Bool
+        let completion: (Bool) -> Void
+        let currentTime: Int64
+        
+        init(aiService: AIMessageService,
+             prompt: String,
+             chatId: String,
+             otherProfile: UserCoreDataReplacement,
+             lastAiMessage: String?,
+             isProfanity: Bool,
+             completion: @escaping (Bool) -> Void,
+             currentTime: Int64) {
+            self.aiServiceRef = aiService
+            self.prompt = prompt
+            self.chatId = chatId
+            self.otherProfile = otherProfile
+            self.lastAiMessage = lastAiMessage
+            self.isProfanity = isProfanity
+            self.completion = completion
+            self.currentTime = currentTime
+        }
+        
+        func onFailure(error: Error) {
+            AppLogger.log(tag: "LOG-APP: AIMessageService", message: "Venice onFailure: \(error.localizedDescription)")
+            SessionManager.shared.setAiLastFailureTime(currentTime)
+            self.completion(false)
+        }
+        
+        func onResponse(responseData: Data) {
+            guard let aiService = aiServiceRef else { return self.completion(false) }
+            let otherUserName = self.otherProfile.name ?? self.otherProfile.username ?? "Friend"
+            let currentUserName = SessionManager.shared.getUserName() ?? ""
+            if let processedResponse = VeniceChatbotService.processAIResponse(
+                responseData: responseData,
+                originalPrompt: prompt,
+                otherUserName: otherUserName,
+                currentUserName: currentUserName
+            ) {
+                AppLogger.log(tag: "LOG-APP: AIMessageService", message: "getAiMessage() Venice processedResponse=\(processedResponse)")
+                // Hard safety trigger: if model signals prohibited content, clear conversation
+                if processedResponse.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "delete conversation" {
+                    AppLogger.log(tag: "LOG-APP: AIMessageService", message: "getAiMessage() Venice trigger received: delete conversation")
+                    aiService.clearAiMessages(chatId: self.chatId, otherUserId: self.otherProfile.userId ?? "") { _ in
+                        self.completion(false)
+                    }
+                    return
+                }
+                if let lastMessage = self.lastAiMessage,
+                   FalconChatbotService.areSentencesSimilar(lastMessage, processedResponse, thresholdPercent: 95) {
+                    AppLogger.log(tag: "LOG-APP: AIMessageService", message: "getAiMessage() Similar message detected (Venice)")
+                    Analytics.logEvent("app_events", parameters: [
+                        AnalyticsParameterItemName: "ai_chat_similar_reply"
+                    ])
+                    self.completion(false)
+                } else {
+                    aiService.saveAiMessage(
+                        message: processedResponse,
+                        chatId: self.chatId,
+                        otherProfile: self.otherProfile,
+                        isProfanity: self.isProfanity,
+                        completion: { success in
+                            if success {
+                                Analytics.logEvent("app_events", parameters: [
+                                    AnalyticsParameterItemName: "ai_chat_success"
+                                ])
+                            }
+                            self.completion(success)
+                        }
+                    )
+                }
+            } else {
+                SessionManager.shared.setAiLastFailureTime(currentTime)
+                self.completion(false)
+            }
+        }
+    }
     
     // MARK: - Public Methods (Android Parity)
     
@@ -74,6 +169,133 @@ class AIMessageService {
             )
         }
     }
+
+    /// Prepares and caches static prompt scaffold for a chat so only CURRENT MESSAGES varies per send
+    func preparePromptScaffold(
+        chatId: String,
+        otherProfile: UserCoreDataReplacement,
+        myProfile: UserCoreDataReplacement,
+        isProfanity: Bool,
+        myInterestTags: [String] = [],
+        otherInterestTags: [String] = [],
+        completion: (() -> Void)? = nil
+    ) {
+        // If already cached, return immediately
+        if promptScaffoldCache[chatId] != nil {
+            completion?()
+            return
+        }
+
+        // Build on background as it may do small string work
+        getAiTrainingMessages(chatId: chatId) { [weak self] trainingMessages in
+            guard let self = self else { return }
+
+            var myInterests = myInterestTags
+            if myInterests.isEmpty { myInterests = SessionManager.shared.interestTags }
+            var otherInterests = otherInterestTags
+            // If AI character has no interests in Firebase, this will remain empty
+            // which is correct - only show interests that are actually stored
+
+            let mood = self.moodGenerator.getMood(isProfanity: isProfanity)
+            let curatedExamples = self.curatedExamplesProvider.curatedExamples(myProfile: myProfile, otherProfile: otherProfile)
+
+            // Extract default system prompt parts
+            let systemPrompt = OpenRouterChatbotService.shared.defaultSystemPrompt()
+            let sysParts = systemPrompt.components(separatedBy: "HARD RULES:")
+            let sysIntro = sysParts.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            var hardRulesSection = ""
+            var behaviorSection = ""
+            if sysParts.count > 1 {
+                let afterHard = sysParts[1]
+                let behaviorParts = afterHard.components(separatedBy: "BEHAVIOR:")
+                hardRulesSection = behaviorParts.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if behaviorParts.count > 1 {
+                    behaviorSection = behaviorParts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+
+            // Names and pronouns
+            let currentUserName = self.sessionManager.getUserName() ?? ""
+            let myName = myProfile.name ?? myProfile.username ?? currentUserName
+            let otherName = otherProfile.name ?? otherProfile.username ?? "Friend"
+            let myGenderLower = myProfile.gender?.lowercased()
+            let myPronoun1 = (myGenderLower == "female") ? "She" : "He"
+            let myPronoun2 = (myGenderLower == "female") ? "Her" : "His"
+
+            // Build OpenRouter header (sections 1-7), excluding CURRENT MESSAGES and YOUR TURN
+            var orHeader = ""
+            orHeader += "CURRENT SCENARIO\n"
+            orHeader += "You are in an adult chat app called ChatHub. "
+            if !sysIntro.isEmpty { orHeader += sysIntro + "\n\n" } else { orHeader += "\n\n" }
+            orHeader += "CURRENT SITUATION\n"
+            orHeader += "You are \(otherName). You are in an adult chat app called ChatHub."
+            orHeader += self.generateYourProfileDescription(profile: otherProfile)
+            orHeader += " You are chatting with \(myName),"
+            orHeader += self.generateProfileDescription(pronoun1: myPronoun1, pronoun2: myPronoun2, profile: myProfile) + "\n\n"
+            if !hardRulesSection.isEmpty {
+                orHeader += "HARD RULES FOR \(otherName)\n" + hardRulesSection + "\n\n"
+            }
+            if !behaviorSection.isEmpty {
+                orHeader += "\(otherName)'S BEHAVIOR\n" + behaviorSection + "\n\n"
+            }
+            orHeader += "CURRENT INTERESTS\n"
+            let myInterestsLine = (myInterests.isEmpty ? SessionManager.shared.interestTags : myInterests).joined(separator: ", ")
+            if !myInterestsLine.isEmpty { orHeader += "\(myName): \(myInterestsLine)\n" }
+            let otherInterestsLine = otherInterests.joined(separator: ", ")
+            if !otherInterestsLine.isEmpty { orHeader += "\(otherName): \(otherInterestsLine)\n" }
+            if let currentInterestSentence = self.sessionManager.getInterestSentence(), !currentInterestSentence.isEmpty {
+                orHeader += currentInterestSentence + "\n"
+            }
+            orHeader += "\n"
+            if !trainingMessages.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                orHeader += "\(otherName)'S REPLY STYLE\n"
+                orHeader += trainingMessages + "\n"
+            }
+            orHeader += "EXAMPLE CONVERSATION BETWEEN \(myName) AND \(otherName)\n"
+            if !curatedExamples.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                orHeader += curatedExamples + "\n"
+            }
+            orHeader += "\n"
+
+            // Build Venice header with same sections (labels slightly differ already in current implementation)
+            var veniceHeader = ""
+            veniceHeader += "CURRENT SITUATION\n"
+            veniceHeader += "You are " + otherName + ". You are in an adult chat app called ChatHub."
+            veniceHeader += self.generateYourProfileDescription(profile: otherProfile)
+            veniceHeader += " You are chatting with " + myName + ","
+            veniceHeader += self.generateProfileDescription(pronoun1: myPronoun1, pronoun2: myPronoun2, profile: myProfile) + "\n\n"
+            if !hardRulesSection.isEmpty {
+                veniceHeader += "HARD RULES FOR \(otherName)\n" + hardRulesSection + "\n\n"
+            }
+            if !behaviorSection.isEmpty {
+                veniceHeader += "\(otherName)'S BEHAVIOR\n" + behaviorSection + "\n\n"
+            }
+            veniceHeader += "CURRENT INTERESTS\n"
+            if !myInterestsLine.isEmpty { veniceHeader += myName + ": " + myInterestsLine + "\n" }
+            if !otherInterestsLine.isEmpty { veniceHeader += otherName + ": " + otherInterestsLine + "\n" }
+            if let currentInterestSentence = self.sessionManager.getInterestSentence(), !currentInterestSentence.isEmpty {
+                veniceHeader += currentInterestSentence + "\n"
+            }
+            veniceHeader += "\n"
+            veniceHeader += "EXAMPLE CONVERSATION BETWEEN \(myName) AND \(otherName)\n"
+            if !curatedExamples.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                veniceHeader += curatedExamples + "\n"
+            }
+            if !trainingMessages.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                veniceHeader += "\(otherName)'S REPLY STYLE\n"
+                veniceHeader += trainingMessages + "\n"
+            }
+            veniceHeader += "\n"
+
+            self.promptScaffoldCache[chatId] = PromptScaffoldCacheEntry(
+                openRouterHeader: orHeader,
+                veniceHeader: veniceHeader,
+                toneMessages: trainingMessages,
+                modelMessages: curatedExamples
+            )
+            completion?()
+        }
+    }
     
     /// Clears AI messages for a chat - Android clearAiMessages() equivalent
     func clearAiMessages(chatId: String, otherUserId: String, completion: @escaping (Bool) -> Void = { _ in }) {
@@ -125,7 +347,61 @@ class AIMessageService {
     ) {
         AppLogger.log(tag: "LOG-APP: AIMessageService", message: "prepareToGetAiMessage() preparing AI message generation")
         
-        // Get AI training messages - Android parity
+        // If we already have a cached scaffold, use it; otherwise compute once now
+        if let cached = self.promptScaffoldCache[chatId] {
+            // Prepare input data for structured prompt
+            var myInterests = myInterestTags
+            if myInterests.isEmpty {
+                myInterests = SessionManager.shared.interestTags
+            }
+            var otherInterests = otherInterestTags
+            // If AI character has no interests in Firebase, this will remain empty
+            // which is correct - only show interests that are actually stored
+
+            // Mood
+            let mood = self.moodGenerator.getMood(isProfanity: isProfanity)
+
+            // Build standardized 9-segment structured prompt (only used for OpenRouter)
+            var orContext = cached.openRouterHeader
+            if !currentMessages.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                orContext += "CURRENT MESSAGES\n" + currentMessages + "\n"
+            } else {
+                orContext += "CURRENT MESSAGES\n\n"
+            }
+            let otherName = otherProfile.name ?? otherProfile.username ?? "Friend"
+            orContext += "YOUR (\(otherName)) TURN\n"
+            orContext += "Now it's your turn to reply. Keep it very short (one brief sentence).\n"
+
+            self.getAiMessage(
+                prompt: self.structuredPromptBuilder.buildPrompt(
+                    myProfile: myProfile,
+                    otherProfile: otherProfile,
+                    myInterests: myInterests,
+                    otherInterests: otherInterests,
+                    curatedExamples: cached.modelMessages,
+                    trainingMessages: cached.toneMessages,
+                    currentConversation: currentMessages,
+                    mood: mood
+                ),
+                apiUrl: aiApiUrl,
+                apiKey: aiApiKey,
+                chatId: chatId,
+                otherProfile: otherProfile,
+                myProfile: myProfile,
+                lastAiMessage: lastAiMessage,
+                isProfanity: isProfanity,
+                completion: completion,
+                userMessageForOpenRouter: currentMessages,
+                openRouterContext: orContext,
+                veniceMyInterests: myInterests,
+                veniceOtherInterests: otherInterests,
+                toneMessages: cached.toneMessages,
+                modelMessages: cached.modelMessages
+            )
+            return
+        }
+
+        // Get AI training messages - Android parity (first-time scaffold build)
         getAiTrainingMessages(chatId: chatId) { [weak self] trainingMessages in
             guard let self = self else {
                 completion(false)
@@ -138,7 +414,9 @@ class AIMessageService {
             if myInterests.isEmpty {
                 myInterests = SessionManager.shared.interestTags
             }
-            let otherInterests = otherInterestTags
+            var otherInterests = otherInterestTags
+            // If AI character has no interests in Firebase, this will remain empty
+            // which is correct - only show interests that are actually stored
 
             // Mood
             let mood = self.moodGenerator.getMood(isProfanity: isProfanity)
@@ -146,7 +424,7 @@ class AIMessageService {
             // Segment 3: Curated, style-focused examples
             let curatedExamples = self.curatedExamplesProvider.curatedExamples(myProfile: myProfile, otherProfile: otherProfile)
 
-            // Build new 5-segment structured prompt
+            // Build standardized 9-segment structured prompt
             let prompt = self.structuredPromptBuilder.buildPrompt(
                 myProfile: myProfile,
                 otherProfile: otherProfile,
@@ -159,15 +437,113 @@ class AIMessageService {
             )
             
             // Send to AI - Android parity
+            // Build a structured OpenRouter context with standardized sections
+            var orContext = ""
+            let currentUserName = self.sessionManager.getUserName() ?? ""
+            let myName = myProfile.name ?? myProfile.username ?? currentUserName
+            let otherName = otherProfile.name ?? otherProfile.username ?? "Friend"
+
+            // Derive pronouns for single-sentence scenario (Falcon style)
+            let myGenderLower = myProfile.gender?.lowercased()
+            let myPronoun1 = (myGenderLower == "female") ? "She" : "He"
+            let myPronoun2 = (myGenderLower == "female") ? "Her" : "His"
+
+            // Extract default system prompt parts to embed in context for consistent headings
+            let systemPrompt = OpenRouterChatbotService.shared.defaultSystemPrompt()
+            let sysParts = systemPrompt.components(separatedBy: "HARD RULES:")
+            let sysIntro = sysParts.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            var hardRulesSection = ""
+            var behaviorSection = ""
+            if sysParts.count > 1 {
+                let afterHard = sysParts[1]
+                let behaviorParts = afterHard.components(separatedBy: "BEHAVIOR:")
+                hardRulesSection = behaviorParts.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if behaviorParts.count > 1 {
+                    behaviorSection = behaviorParts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+
+            // 1) CURRENT SCENARIO (high-level description)
+            orContext += "CURRENT SCENARIO\n"
+            orContext += "You are in an adult chat app called ChatHub. "
+            if !sysIntro.isEmpty { orContext += sysIntro + "\n\n" } else { orContext += "\n\n" }
+
+            // 2) CURRENT SITUATION (complete profile sentence for both participants)
+            orContext += "CURRENT SITUATION\n"
+            orContext += "You are \(otherName). You are in an adult chat app called ChatHub."
+            orContext += self.generateYourProfileDescription(profile: otherProfile)
+            orContext += " You are chatting with \(myName),"
+            orContext += self.generateProfileDescription(pronoun1: myPronoun1, pronoun2: myPronoun2, profile: myProfile) + "\n\n"
+
+            // 3) HARD RULES
+            if !hardRulesSection.isEmpty {
+                orContext += "HARD RULES FOR \(otherName)\n"
+                orContext += hardRulesSection + "\n\n"
+            }
+
+            // 4) BEHAVIOR
+            if !behaviorSection.isEmpty {
+                orContext += "\(otherName)'S BEHAVIOR\n"
+                orContext += behaviorSection + "\n\n"
+            }
+
+            // 5) CURRENT INTERESTS
+            orContext += "CURRENT INTERESTS\n"
+            let myInterestsLine = (myInterests.isEmpty ? SessionManager.shared.interestTags : myInterests).joined(separator: ", ")
+            if !myInterestsLine.isEmpty { orContext += "\(myName): \(myInterestsLine)\n" }
+            let otherInterestsLine = otherInterests.joined(separator: ", ")
+            if !otherInterestsLine.isEmpty { orContext += "\(otherName): \(otherInterestsLine)\n" }
+            if let currentInterestSentence = self.sessionManager.getInterestSentence(), !currentInterestSentence.isEmpty {
+                orContext += currentInterestSentence + "\n"
+            }
+            orContext += "\n"
+
+            // 6) AI CHARACTER'S REPLY STYLE (from Firebase via local store)
+            if !trainingMessages.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                orContext += "\(otherName)'S REPLY STYLE\n"
+                orContext += trainingMessages + "\n"
+            }
+
+            // 7) EXAMPLE CONVERSATION (hand-crafted examples)
+            orContext += "EXAMPLE CONVERSATION BETWEEN \(myName) AND \(otherName)\n"
+            if !curatedExamples.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                orContext += curatedExamples + "\n"
+            }
+            orContext += "\n"
+
+            // 8) CURRENT MESSAGES (recent conversation excerpts)
+            orContext += "CURRENT MESSAGES\n"
+            if !currentMessages.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                orContext += currentMessages + "\n"
+            }
+            // 9) YOUR TURN (explicit reply instruction)
+            orContext += "\nYOUR (\(otherName)) TURN\n"
+            orContext += "Now it's your turn to reply. Keep it very short (one brief sentence).\n"
+
+            // Cache the header for reuse next time
+            self.promptScaffoldCache[chatId] = PromptScaffoldCacheEntry(
+                openRouterHeader: orContext,
+                veniceHeader: "", // We'll create Venice header in getAiMessage when needed for first send below
+                toneMessages: trainingMessages,
+                modelMessages: curatedExamples
+            )
+
             self.getAiMessage(
                 prompt: prompt,
                 apiUrl: aiApiUrl,
                 apiKey: aiApiKey,
                 chatId: chatId,
                 otherProfile: otherProfile,
+                myProfile: myProfile,
                 lastAiMessage: lastAiMessage,
                 isProfanity: isProfanity,
-                completion: completion
+                completion: completion,
+                userMessageForOpenRouter: currentMessages,
+                openRouterContext: orContext,
+                veniceMyInterests: myInterests,
+                veniceOtherInterests: otherInterests,
+                toneMessages: trainingMessages,
+                modelMessages: curatedExamples
             )
         }
     }
@@ -292,8 +668,15 @@ class AIMessageService {
     private func generateYourProfileDescription(profile: UserCoreDataReplacement) -> String {
         var descriptionBuilder = ""
         
-        appendIfValid(&descriptionBuilder, prefix: " You are a ", value: profile.age, suffix: "-year-old")
-        appendIfValid(&descriptionBuilder, prefix: " ", value: profile.gender?.lowercased(), suffix: "")
+        // Combine age and gender for better readability
+        if let age = profile.age, !age.isEmpty && age.lowercased() != "null",
+           let gender = profile.gender?.lowercased(), !gender.isEmpty && gender != "null" {
+            descriptionBuilder += " You are a \(age)-year-old \(gender)"
+        } else if let age = profile.age, !age.isEmpty && age.lowercased() != "null" {
+            descriptionBuilder += " You are \(age) years old"
+        } else if let gender = profile.gender?.lowercased(), !gender.isEmpty && gender != "null" {
+            descriptionBuilder += " You are \(gender)"
+        }
         
         if isValid(profile.city) {
             appendIfValid(&descriptionBuilder, prefix: " from ", value: profile.city, suffix: ".")
@@ -330,8 +713,15 @@ class AIMessageService {
     private func generateProfileDescription(pronoun1: String, pronoun2: String, profile: UserCoreDataReplacement) -> String {
         var descriptionBuilder = ""
         
-        appendIfValid(&descriptionBuilder, prefix: " \(pronoun1) is a ", value: profile.age, suffix: "-year-old")
-        appendIfValid(&descriptionBuilder, prefix: " ", value: profile.gender?.lowercased(), suffix: "")
+        // Combine age and gender for better readability
+        if let age = profile.age, !age.isEmpty && age.lowercased() != "null",
+           let gender = profile.gender?.lowercased(), !gender.isEmpty && gender != "null" {
+            descriptionBuilder += " \(pronoun1) is a \(age)-year-old \(gender)"
+        } else if let age = profile.age, !age.isEmpty && age.lowercased() != "null" {
+            descriptionBuilder += " \(pronoun1) is \(age) years old"
+        } else if let gender = profile.gender?.lowercased(), !gender.isEmpty && gender != "null" {
+            descriptionBuilder += " \(pronoun1) is \(gender)"
+        }
         
         if isValid(profile.city) {
             appendIfValid(&descriptionBuilder, prefix: " from ", value: profile.city, suffix: ".")
@@ -415,9 +805,16 @@ class AIMessageService {
         apiKey: String,
         chatId: String,
         otherProfile: UserCoreDataReplacement,
+        myProfile: UserCoreDataReplacement,
         lastAiMessage: String?,
         isProfanity: Bool,
-        completion: @escaping (Bool) -> Void
+        completion: @escaping (Bool) -> Void,
+        userMessageForOpenRouter: String = "",
+        openRouterContext: String = "",
+        veniceMyInterests: [String] = [],
+        veniceOtherInterests: [String] = [],
+        toneMessages: String = "",
+        modelMessages: String = ""
     ) {
         AppLogger.log(tag: "LOG-APP: AIMessageService", message: "getAiMessage() checking cooldown")
         
@@ -480,6 +877,15 @@ class AIMessageService {
                      return
                  }
                  
+                 // Hard safety trigger: if model signals prohibited content, clear conversation
+                 if processedResponse.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "delete conversation" {
+                     AppLogger.log(tag: "LOG-APP: AIMessageService", message: "getAiMessage() Falcon trigger received: delete conversation")
+                     self.aiService.clearAiMessages(chatId: self.chatId, otherUserId: self.otherProfile.userId ?? "") { _ in
+                         self.completion(false)
+                     }
+                     return
+                 }
+                 
                  // Check similarity using new FalconChatbotService method
                  if let lastMessage = self.lastAiMessage,
                     FalconChatbotService.areSentencesSimilar(lastMessage, processedResponse, thresholdPercent: 95) {
@@ -508,7 +914,293 @@ class AIMessageService {
                  }
             }
         }
-        
+
+        // OpenRouter callback for OpenRouterChatbotService
+        class OpenRouterCallback: OpenRouterChatbotService.OpenRouterCallback {
+            let aiService: AIMessageService
+            let prompt: String
+            let chatId: String
+            let otherProfile: UserCoreDataReplacement
+            let lastAiMessage: String?
+            let isProfanity: Bool
+            let completion: (Bool) -> Void
+            let currentTime: Int64
+            
+            init(aiService: AIMessageService, prompt: String, chatId: String, otherProfile: UserCoreDataReplacement, lastAiMessage: String?, isProfanity: Bool, completion: @escaping (Bool) -> Void, currentTime: Int64) {
+                self.aiService = aiService
+                self.prompt = prompt
+                self.chatId = chatId
+                self.otherProfile = otherProfile
+                self.lastAiMessage = lastAiMessage
+                self.isProfanity = isProfanity
+                self.completion = completion
+                self.currentTime = currentTime
+            }
+            
+            func onFailure(error: Error) {
+                AppLogger.log(tag: "LOG-APP: AIMessageService", message: "getAiMessage() OpenRouter request failed: \(error.localizedDescription)")
+                aiService.sessionManager.setAiLastFailureTime(currentTime)
+                Analytics.logEvent("app_events", parameters: [
+                    AnalyticsParameterItemName: "ai_chat_failed_call_\(error.localizedDescription)"
+                ])
+                self.completion(false)
+            }
+            
+            func onResponse(responseData: Data) {
+                AppLogger.log(tag: "LOG-APP: AIMessageService", message: "getAiMessage() OpenRouter response received")
+                guard let processedResponse = OpenRouterChatbotService.processAIResponse(
+                    responseData: responseData,
+                    originalPrompt: self.prompt,
+                    otherUserName: self.otherProfile.name ?? "",
+                    currentUserName: self.aiService.sessionManager.getUserName() ?? ""
+                ) else {
+                    AppLogger.log(tag: "LOG-APP: AIMessageService", message: "getAiMessage() Failed to process OpenRouter response")
+                    self.completion(false)
+                    return
+                }
+                // Hard safety trigger: if model signals prohibited content, clear conversation
+                if processedResponse.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "delete conversation" {
+                    AppLogger.log(tag: "LOG-APP: AIMessageService", message: "getAiMessage() trigger received: delete conversation")
+                    self.aiService.clearAiMessages(chatId: self.chatId, otherUserId: self.otherProfile.userId ?? "") { _ in
+                        self.completion(false)
+                    }
+                    return
+                }
+                if let lastMessage = self.lastAiMessage,
+                   FalconChatbotService.areSentencesSimilar(lastMessage, processedResponse, thresholdPercent: 95) {
+                    AppLogger.log(tag: "LOG-APP: AIMessageService", message: "getAiMessage() Similar message detected (OpenRouter)")
+                    Analytics.logEvent("app_events", parameters: [
+                        AnalyticsParameterItemName: "ai_chat_similar_reply"
+                    ])
+                    self.completion(false)
+                } else {
+                    self.aiService.saveAiMessage(
+                        message: processedResponse,
+                        chatId: self.chatId,
+                        otherProfile: self.otherProfile,
+                        isProfanity: self.isProfanity,
+                        completion: { success in
+                            if success {
+                                Analytics.logEvent("app_events", parameters: [
+                                    AnalyticsParameterItemName: "ai_chat_success"
+                                ])
+                            }
+                            self.completion(success)
+                        }
+                    )
+                }
+            }
+        }
+
+        // Route to provider
+        let provider = sessionManager.aiModelProvider.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if provider == "openrouter" {
+            let callback = OpenRouterCallback(
+                aiService: self,
+                prompt: prompt,
+                chatId: chatId,
+                otherProfile: otherProfile,
+                lastAiMessage: lastAiMessage,
+                isProfanity: isProfanity,
+                completion: completion,
+                currentTime: currentTime
+            )
+            // Fetch URL/Key directly from SessionManager (Firebase-backed AppSettings)
+            let activeUrl = self.sessionManager.aiChatBotURL ?? ""
+            let activeKey = self.sessionManager.aiApiKey ?? ""
+            #if DEBUG
+            if UserDefaults.standard.bool(forKey: "OPENROUTER_USER_ONLY_TEST") {
+                AppLogger.log(tag: "LOG-APP: AIMessageService", message: "Using OpenRouter user-only debug path")
+                openRouterChatbot.sendUserOnlyMessage(
+                    apiURL: activeUrl,
+                    apiKey: activeKey,
+                    userPrompt: userMessageForOpenRouter.isEmpty ? prompt : userMessageForOpenRouter,
+                    callback: callback
+                )
+            } else {
+                openRouterChatbot.sendMessage(
+                    apiURL: activeUrl,
+                    apiKey: activeKey,
+                    systemPrompt: nil,
+                    data: openRouterContext,
+                    originalPrompt: userMessageForOpenRouter.isEmpty ? prompt : userMessageForOpenRouter,
+                    callback: callback
+                )
+            }
+            #else
+            openRouterChatbot.sendMessage(
+                apiURL: activeUrl,
+                apiKey: activeKey,
+                systemPrompt: nil,
+                data: openRouterContext,
+                originalPrompt: userMessageForOpenRouter.isEmpty ? prompt : userMessageForOpenRouter,
+                callback: callback
+            )
+            #endif
+            return
+        } else if provider == "venice" {
+            let callback = VeniceCallbackProxy(
+                aiService: self,
+                prompt: prompt,
+                chatId: chatId,
+                otherProfile: otherProfile,
+                lastAiMessage: lastAiMessage,
+                isProfanity: isProfanity,
+                completion: completion,
+                currentTime: currentTime
+            )
+            // Prefer explicit Venice URL; default to Venice base if unset (do not use aiChatBotURL)
+            let activeUrl = SessionManager.shared.veniceApiUrl.isEmpty ? "https://api.venice.ai/api/v1" : SessionManager.shared.veniceApiUrl
+            let activeKey = SessionManager.shared.veniceApiKey.isEmpty ? (self.sessionManager.aiApiKey ?? "") : SessionManager.shared.veniceApiKey
+
+            // If scaffold cached, build the final single-prompt using cached header and dynamic CURRENT MESSAGES only
+            if let cached = self.promptScaffoldCache[chatId] {
+                let otherDisplayName = otherProfile.name ?? otherProfile.username ?? "Friend"
+                let myDisplayName = myProfile.name ?? myProfile.username ?? (self.sessionManager.getUserName() ?? "")
+                let finalUserMessage = userMessageForOpenRouter.isEmpty ? prompt : userMessageForOpenRouter
+
+                var singlePrompt = cached.veniceHeader
+                if singlePrompt.isEmpty {
+                    // Build Venice header on first use if not present yet using cached tone/model blocks
+                    let systemPrompt = OpenRouterChatbotService.shared.defaultSystemPrompt()
+                    let vParts = systemPrompt.components(separatedBy: "HARD RULES:")
+                    let vIntro = vParts.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    let myGenderLower = myProfile.gender?.lowercased()
+                    let myPronoun1 = (myGenderLower == "female") ? "She" : "He"
+                    let myPronoun2 = (myGenderLower == "female") ? "Her" : "His"
+                    var header = ""
+                    header += "CURRENT SITUATION\n"
+                    header += "You are " + otherDisplayName + ". You are in an adult chat app called ChatHub."
+                    header += self.generateYourProfileDescription(profile: otherProfile)
+                    header += " You are chatting with " + myDisplayName + ","
+                    header += self.generateProfileDescription(pronoun1: myPronoun1, pronoun2: myPronoun2, profile: myProfile) + "\n\n"
+                    // We don't reconstruct HARD RULES/BEHAVIOR here; they are already embedded in cached.openRouterHeader for OR path
+                    // But to keep Venice header consistent, reuse tone/model from cache as sections
+                    // Since we don't have interest lines readily, we will rely on the original cached.openRouterHeader content for interests when initially cached
+                    // For Venice, we keep minimal duplication by appending tone/model blocks from cache
+                    // Add CURRENT INTERESTS section to keep Venice header parity with other paths
+                    header += "CURRENT INTERESTS\n"
+                    let veniceMyInterestsLine = (veniceMyInterests.isEmpty ? SessionManager.shared.interestTags : veniceMyInterests).joined(separator: ", ")
+                    if !veniceMyInterestsLine.isEmpty { header += myDisplayName + ": " + veniceMyInterestsLine + "\n" }
+                    let veniceOtherInterestsLine = veniceOtherInterests.joined(separator: ", ")
+                    if !veniceOtherInterestsLine.isEmpty { header += otherDisplayName + ": " + veniceOtherInterestsLine + "\n" }
+                    if let currentInterestSentence = self.sessionManager.getInterestSentence(), !currentInterestSentence.isEmpty {
+                        header += currentInterestSentence + "\n"
+                    }
+                    header += "\n"
+                    header += "EXAMPLE CONVERSATION BETWEEN \(myDisplayName) AND \(otherDisplayName)\n"
+                    if !cached.modelMessages.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        header += cached.modelMessages + "\n"
+                    }
+                    if !cached.toneMessages.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        header += "\(otherDisplayName)'S REPLY STYLE\n"
+                        header += cached.toneMessages + "\n"
+                    }
+                    header += "\n"
+                    singlePrompt = header
+                    // Save back to cache for subsequent reuse
+                    self.promptScaffoldCache[chatId] = PromptScaffoldCacheEntry(
+                        openRouterHeader: cached.openRouterHeader,
+                        veniceHeader: header,
+                        toneMessages: cached.toneMessages,
+                        modelMessages: cached.modelMessages
+                    )
+                }
+                singlePrompt += "CURRENT MESSAGES\n" + finalUserMessage
+                singlePrompt += "\n\nYOUR (\(otherDisplayName)) TURN\n"
+                singlePrompt += "Now it's your turn to reply. Keep it very short (one brief sentence)."
+
+                veniceChatbot.sendSinglePrompt(
+                    apiURL: activeUrl,
+                    apiKey: activeKey,
+                    prompt: singlePrompt,
+                    callback: callback
+                )
+                return
+            }
+            // Build single-prompt content with standardized headings:
+            // 1) CURRENT SCENARIO (description)
+            // 2) CURRENT SITUATION (profiles)
+            // 3) HARD RULES
+            // 4) BEHAVIOR
+            // 5) CURRENT INTERESTS
+            // 6) AI CHARACTER'S REPLY STYLE
+            // 7) EXAMPLE CONVERSATION
+            // 8) CURRENT MESSAGES
+            // 9) YOUR TURN
+            var singlePrompt = ""
+            // Extract default system prompt parts
+            let veniceSystemPrompt = OpenRouterChatbotService.shared.defaultSystemPrompt()
+            let vParts = veniceSystemPrompt.components(separatedBy: "HARD RULES:")
+            let vIntro = vParts.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            var vHardRules = ""
+            var vBehavior = ""
+            if vParts.count > 1 {
+                let afterHard = vParts[1]
+                let bParts = afterHard.components(separatedBy: "BEHAVIOR:")
+                vHardRules = bParts.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if bParts.count > 1 {
+                    vBehavior = bParts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+            // 1) CURRENT SITUATION (merged)
+            singlePrompt += "CURRENT SITUATION\n"
+            let otherDisplayName = otherProfile.name ?? otherProfile.username ?? "Friend"
+            singlePrompt += "You are " + otherDisplayName + ". You are in an adult chat app called ChatHub."
+            let myDisplayName = myProfile.name ?? myProfile.username ?? (self.sessionManager.getUserName() ?? "")
+            let myGenderLower = myProfile.gender?.lowercased()
+            let myPronoun1 = (myGenderLower == "female") ? "She" : "He"
+            let myPronoun2 = (myGenderLower == "female") ? "Her" : "His"
+            singlePrompt += self.generateYourProfileDescription(profile: otherProfile)
+            singlePrompt += " You are chatting with " + myDisplayName + ","
+            singlePrompt += self.generateProfileDescription(pronoun1: myPronoun1, pronoun2: myPronoun2, profile: myProfile) + "\n\n"
+            // 2) HARD RULES
+            if !vHardRules.isEmpty {
+                singlePrompt += "HARD RULES FOR \(otherDisplayName)\n"
+                singlePrompt += vHardRules + "\n\n"
+            }
+            // 3) BEHAVIOR
+            if !vBehavior.isEmpty {
+                singlePrompt += "\(otherDisplayName)'S BEHAVIOR\n"
+                singlePrompt += vBehavior + "\n\n"
+            }
+            // 5) CURRENT INTERESTS
+            singlePrompt += "CURRENT INTERESTS\n"
+            let myInterestsLine = (veniceMyInterests.isEmpty ? SessionManager.shared.interestTags : veniceMyInterests).joined(separator: ", ")
+            if !myInterestsLine.isEmpty { singlePrompt += myDisplayName + ": " + myInterestsLine + "\n" }
+            let otherInterestsLine = veniceOtherInterests.joined(separator: ", ")
+            if !otherInterestsLine.isEmpty { singlePrompt += otherDisplayName + ": " + otherInterestsLine + "\n" }
+            if let currentInterestSentence = self.sessionManager.getInterestSentence(), !currentInterestSentence.isEmpty {
+                singlePrompt += currentInterestSentence + "\n"
+            }
+            singlePrompt += "\n"
+            // EXAMPLE CONVERSATION (hand-crafted) before reply style
+            singlePrompt += "EXAMPLE CONVERSATION BETWEEN \(myDisplayName) AND \(otherDisplayName)\n"
+            if !modelMessages.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                singlePrompt += modelMessages + "\n"
+            }
+            // AI CHARACTER'S REPLY STYLE (periodic uploads)
+            if !toneMessages.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                singlePrompt += "\(otherDisplayName)'S REPLY STYLE\n"
+                singlePrompt += toneMessages + "\n"
+            }
+            singlePrompt += "\n"
+            // 8) CURRENT MESSAGES (user input)
+            let finalUserMessage = userMessageForOpenRouter.isEmpty ? prompt : userMessageForOpenRouter
+            singlePrompt += "CURRENT MESSAGES\n" + finalUserMessage
+            // 9) YOUR TURN (explicit reply instruction)
+            singlePrompt += "\n\nYOUR (\(otherDisplayName)) TURN\n"
+            singlePrompt += "Now it's your turn to reply. Keep it very short (one brief sentence)."
+            
+            veniceChatbot.sendSinglePrompt(
+                apiURL: activeUrl,
+                apiKey: activeKey,
+                prompt: singlePrompt,
+                callback: callback
+            )
+            return
+        }
+
         let callback = AICallback(
             aiService: self,
             prompt: prompt,
@@ -520,7 +1212,10 @@ class AIMessageService {
             currentTime: currentTime
         )
         
-        falconChatbot.sendMessage(apiURL: apiUrl, apiKey: apiKey, prompt: prompt, callback: callback)
+        // Fetch URL/Key directly from SessionManager (Firebase-backed AppSettings)
+        let activeUrl = self.sessionManager.aiChatBotURL ?? ""
+        let activeKey = self.sessionManager.aiApiKey ?? ""
+        falconChatbot.sendMessage(apiURL: activeUrl, apiKey: activeKey, prompt: prompt, callback: callback)
     }
     
     // Note: processAiMessage method removed - now using FalconChatbotService.processAIResponse for Android parity
